@@ -11,6 +11,15 @@
     "Other"
   ],
   "icon": "icons/harness-logo.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thisrohangupta/harness-vscode-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/thisrohangupta/harness-vscode-extension/issues"
+  },
+  "homepage": "https://github.com/thisrohangupta/harness-vscode-extension#readme",
   "activationEvents": [
     "onStartupFinished"
   ],
