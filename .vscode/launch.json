@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile",
+      "env": {
+        // Optional: Override FME SDK key for testing custom feature flags
+        // "HARNESS_FME_SDK_KEY": "your-sdk-key-here"
+      }
+    }
+  ]
+}

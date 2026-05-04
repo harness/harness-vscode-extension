@@ -5,3 +5,11 @@ out/
 .env
 .env.local
 .DS_Store
+
+# Cursor integration test files
+.cursor-auth-snapshots/
+cursor-auth-test.sh
+test-cursor-commands.js
+
+# Design handoff assets (not needed for extension)
+handoff/
