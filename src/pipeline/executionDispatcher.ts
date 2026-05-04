@@ -4,16 +4,19 @@ import { DiagnosticsManager } from '../features/diagnosticsManager';
 import { WebviewBridge } from '../ui/webviewBridge';
 import { ExecutionDetail, ExecutionGraph } from '../api/types';
 import { GitContext } from '../git/gitContext';
-import { streamLogs, findActiveStage, findActiveSteps, findLeafStepsWithLogKey, fetchStepLogs, findFailedStage } from '../api/logService';
-import { getStoFindings } from '../api/stoService';
-import { applySTO, summariseSTO } from '../features/stoAnnotations';
+import { streamLogs, findActiveStage, findActiveSteps, findLeafStepsWithLogKey, fetchStepLogs } from '../api/logService';
+// STO imports - disabled for now
+// import { getStoFindings } from '../api/stoService';
+// import { applySTO, summariseSTO } from '../features/stoAnnotations';
 import { getTiOverview, getFlakyTests } from '../api/tiService';
 import { applyTI, summariseTI } from '../features/tiAnnotations';
 import { getSscaSbom } from '../api/sscaService';
 import { applySSCA, summariseSSCA } from '../features/sscaAnnotations';
-import { getAidaRca } from '../api/aidaService';
+// AIDA imports - disabled (endpoint 404)
+// import { getAidaRca } from '../api/aidaService';
 import { getBuildCost } from '../api/ccmService';
 import { canCurrentUserApprove } from '../api/userService';
+import { logger } from '../utils/logger';
 
 export async function dispatchModules(
   execution: ExecutionDetail,
@@ -33,7 +36,7 @@ export async function dispatchModules(
   // Fetch logs for terminal executions AND for ApprovalWaiting (so previous steps can be viewed)
   const shouldFetchLogs = isTerminal || status === 'APPROVALWAITING';
 
-  console.log('[Harness] dispatchModules status check:', {
+  logger.debug('Harness', 'dispatchModules status check:', {
     rawStatus: execution.status,
     normalizedStatus: status,
     isTerminal,
@@ -112,23 +115,23 @@ export async function dispatchModules(
       });
       webview.send({ type: 'CD_UPDATE', deployments });
     } catch (e) {
-      console.error('[Harness] CD dispatch error:', e);
+      logger.error('Harness', 'CD dispatch error:', e);
     }
   }
 
-  // STO: vulnerability findings — always attempt on completed runs.
+  // STO: vulnerability findings — DISABLED (will be implemented later)
   // When STO steps run inside a CI stage, moduleInfo.sto is absent but the
   // /sto/api/v1/issues endpoint still returns findings. It returns [] when
   // there are none, so calling it unconditionally is safe.
-  if (['SUCCESS', 'FAILED'].includes(status)) {
-    try {
-      const findings = await getStoFindings(client, planExecutionId);
-      applySTO(findings, config.diffAwareSTO, diagnostics);
-      webview.send({ type: 'STO_SUMMARY', ...summariseSTO(findings) });
-    } catch (e) {
-      console.error('[Harness] STO dispatch error:', e);
-    }
-  }
+  // if (['SUCCESS', 'FAILED'].includes(status)) {
+  //   try {
+  //     const findings = await getStoFindings(client, planExecutionId);
+  //     applySTO(findings, config.diffAwareSTO, diagnostics);
+  //     webview.send({ type: 'STO_SUMMARY', ...summariseSTO(findings) });
+  //   } catch (e) {
+  //     console.error('[Harness] STO dispatch error:', e);
+  //   }
+  // }
 
   // TI: test results + flaky flags
   if (moduleInfo.ti) {
@@ -140,7 +143,7 @@ export async function dispatchModules(
       applyTI(overview, flaky, diagnostics);
       webview.send({ type: 'TI_SUMMARY', ...summariseTI(overview, flaky) });
     } catch (e) {
-      console.error('[Harness] TI dispatch error:', e);
+      logger.error('Harness', 'TI dispatch error:', e);
     }
   }
 
@@ -151,7 +154,7 @@ export async function dispatchModules(
       applySSCA(sbom, diagnostics);
       webview.send({ type: 'SSCA_SUMMARY', ...summariseSSCA(sbom) });
     } catch (e) {
-      console.error('[Harness] SSCA dispatch error:', e);
+      logger.error('Harness', 'SSCA dispatch error:', e);
     }
   }
 
@@ -186,7 +189,7 @@ export async function dispatchModules(
         n.stepType?.toLowerCase().includes('approval') || /waiting/i.test(n.status)
       );
       if (approvalLikeNodes.length > 0) {
-        console.log('[Harness] Approval detection - found nodes:', approvalLikeNodes.map(n => ({
+        logger.debug('Harness', 'Approval detection - found nodes:', approvalLikeNodes.map(n => ({
           name: n.name,
           stepType: n.stepType,
           status: n.status,
@@ -218,7 +221,7 @@ export async function dispatchModules(
       if (harnessApprovalNode || genericApprovalNode) {
         const n = (harnessApprovalNode || genericApprovalNode) as any;
 
-        console.log('[Harness] Found approval node:', {
+        logger.debug('Harness', 'Found approval node:', {
           name: n.name,
           stepType: n.stepType,
           status: n.status,
@@ -240,7 +243,7 @@ export async function dispatchModules(
         const stageIdMatch = baseFqn.match(/pipeline\.stages\.([^.]+)/);
         const stageIdentifier = stageIdMatch ? stageIdMatch[1] : undefined;
 
-        console.log('[Harness] Approval details:', {
+        logger.debug('Harness', 'Approval details:', {
           stageIdentifier,
           approvers,
           userGroups,
@@ -251,7 +254,7 @@ export async function dispatchModules(
         const canApprove = await canCurrentUserApprove(config, rawUsers, rawGroups)
           .catch(() => null); // null = unknown → webview defaults to showing buttons
 
-        console.log('[Harness] Sending APPROVAL_UPDATE to webview:', {
+        logger.debug('Harness', 'Sending APPROVAL_UPDATE to webview:', {
           planExecutionId,
           stageIdentifier,
           canApprove
@@ -329,24 +332,24 @@ export async function dispatchModules(
           stageIdentifier,
         });
       } else {
-        console.log('[Harness] No approval node found matching criteria');
+        logger.debug('Harness', 'No approval node found matching criteria');
       }
     } catch (e) {
-      console.error('[Harness] Approval dispatch error:', e);
+      logger.error('Harness', 'Approval dispatch error:', e);
     }
   }
 
-  // AIDA: root cause analysis on any failed stage
-  const layoutNodeMap = execution.layoutNodeMap ?? {};
-  const failedStage = findFailedStage(layoutNodeMap);
-  if (failedStage) {
-    try {
-      const rca = await getAidaRca(client, config, planExecutionId, failedStage.nodeUuid);
-      webview.send({ type: 'AIDA_UPDATE', stageId: failedStage.nodeUuid, rca });
-    } catch (e) {
-      console.error('[Harness] AIDA dispatch error:', e);
-    }
-  }
+  // AIDA: root cause analysis on any failed stage — DISABLED (endpoint returns 404)
+  // const layoutNodeMap = execution.layoutNodeMap ?? {};
+  // const failedStage = findFailedStage(layoutNodeMap);
+  // if (failedStage) {
+  //   try {
+  //     const rca = await getAidaRca(client, config, planExecutionId, failedStage.nodeUuid);
+  //     webview.send({ type: 'AIDA_UPDATE', stageId: failedStage.nodeUuid, rca });
+  //   } catch (e) {
+  //     console.error('[Harness] AIDA dispatch error:', e);
+  //   }
+  // }
 
   // CCM: build cost — best-effort, silent skip on failure
   if (moduleInfo.ccm) {
