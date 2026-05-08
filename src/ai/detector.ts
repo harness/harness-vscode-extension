@@ -272,9 +272,19 @@ function isCursorPluginOAuthReady(cursorDir: string): boolean {
 
 /**
  * Detect Cursor AI editor
+ * Only detects when running inside Cursor editor (not VS Code)
  */
 async function detectCursor(): Promise<DetectedTool | null> {
   try {
+    // Step 0 - Are we running in Cursor editor?
+    // Check if the host application is Cursor
+    const isCursorEditor = vscode.env.appName.toLowerCase().includes('cursor');
+
+    if (!isCursorEditor) {
+      // Running in VS Code, not Cursor - skip detection
+      return null;
+    }
+
     // Step 1 - Is Cursor installed?
     const cursorDir = path.join(os.homedir(), '.cursor');
     const cursorInstalled = fs.existsSync(cursorDir);
