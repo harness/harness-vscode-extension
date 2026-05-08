@@ -236,27 +236,33 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
     await vscode.env.clipboard.writeText(prompt);
     console.log('[AI Launcher] ✓ Prompt copied');
 
-    // Show notification with paste button
-    const action = await vscode.window.showInformationMessage(
-      'Prompt copied! Paste it in Claude Code to continue.',
-      'Paste Now'
-    );
+    // Give UI time to render and focus
+    await new Promise(resolve => setTimeout(resolve, 800));
 
-    if (action === 'Paste Now') {
-      console.log('[AI Launcher] User clicked Paste Now - sending paste command');
-      // Try to paste in the Claude input (this might not work if focus is wrong)
-      try {
-        await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
-        console.log('[AI Launcher] ✓ Paste command sent');
-      } catch (err) {
-        console.log('[AI Launcher] ⚠ Paste command failed:', err);
-      }
+    // Auto-paste without user interaction
+    console.log('[AI Launcher] Auto-pasting prompt...');
+    try {
+      await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
+      console.log('[AI Launcher] ✓ Auto-paste successful');
+
+      // Show brief success notification
+      vscode.window.showInformationMessage(
+        '✅ Prompt sent to Claude Code',
+        { modal: false }
+      );
+    } catch (err) {
+      console.log('[AI Launcher] ⚠ Auto-paste failed, showing fallback notification');
+      // Fallback: show notification if auto-paste fails
+      vscode.window.showInformationMessage(
+        'Prompt copied to clipboard - paste it in Claude Code (Cmd+V)',
+        'OK'
+      );
     }
 
     console.log('[AI Launcher] ✓ Extension launch complete');
     return {
       type: 'launched',
-      content: 'Opened Claude Code Extension. Prompt ready to paste.',
+      content: 'Prompt auto-pasted to Claude Code.',
     };
   } catch (error) {
     console.error('[AI Launcher] ✗ Extension launch failed:', error);
