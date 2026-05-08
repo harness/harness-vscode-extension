@@ -40,8 +40,9 @@ export class PipelinePoller implements vscode.Disposable {
   private detailExecutionId: string | null = null;
   private detailLastStatus: string | null = null;
 
-  // Visibility tracking - pause polling when sidebar is hidden
-  private isVisible: boolean = false;
+  // Visibility tracking - pause polling when sidebar is hidden or window unfocused
+  private isSidebarVisible: boolean = false;
+  private isWindowFocused: boolean = true; // Assume focused initially
 
   constructor(
     private readonly client: HarnessClient,
@@ -64,23 +65,52 @@ export class PipelinePoller implements vscode.Disposable {
   }
 
   /**
-   * Set visibility state - pauses polling when hidden, resumes when visible
+   * Set sidebar visibility state - pauses polling when hidden, resumes when visible
    */
-  setVisible(visible: boolean): void {
-    const wasVisible = this.isVisible;
-    this.isVisible = visible;
+  setSidebarVisible(visible: boolean): void {
+    const wasActive = this.isActive();
+    this.isSidebarVisible = visible;
+    const isActive = this.isActive();
 
-    if (visible && !wasVisible) {
-      // Becoming visible - do immediate refresh to show fresh data
-      console.log('[PipelinePoller] Sidebar became visible - resuming polling');
+    if (isActive && !wasActive) {
+      // Becoming active - do immediate refresh to show fresh data
+      console.log('[PipelinePoller] Sidebar visible and window focused - resuming polling');
       this.lastStatus = null; // Force refresh
       this.stopTimer();
       this.tick();
-    } else if (!visible && wasVisible) {
-      // Becoming hidden - stop polling to save resources
-      console.log('[PipelinePoller] Sidebar hidden - pausing polling');
+    } else if (!isActive && wasActive) {
+      // Becoming inactive - stop polling to save resources
+      console.log('[PipelinePoller] Sidebar hidden or window unfocused - pausing polling');
       this.stopTimer();
     }
+  }
+
+  /**
+   * Set window focus state - pauses polling when unfocused, resumes when focused
+   */
+  setWindowFocused(focused: boolean): void {
+    const wasActive = this.isActive();
+    this.isWindowFocused = focused;
+    const isActive = this.isActive();
+
+    if (isActive && !wasActive) {
+      // Becoming active - do immediate refresh to show fresh data
+      console.log('[PipelinePoller] Window focused and sidebar visible - resuming polling');
+      this.lastStatus = null; // Force refresh
+      this.stopTimer();
+      this.tick();
+    } else if (!isActive && wasActive) {
+      // Becoming inactive - stop polling to save resources
+      console.log('[PipelinePoller] Window unfocused - pausing polling');
+      this.stopTimer();
+    }
+  }
+
+  /**
+   * Check if polling should be active (sidebar visible AND window focused)
+   */
+  private isActive(): boolean {
+    return this.isSidebarVisible && this.isWindowFocused;
   }
 
   private async watchGit(): Promise<void> {
@@ -128,9 +158,9 @@ export class PipelinePoller implements vscode.Disposable {
   }
 
   private async tick(): Promise<void> {
-    // Skip API calls if sidebar is not visible
-    if (!this.isVisible) {
-      console.log('[PipelinePoller] Skipping tick - sidebar not visible');
+    // Skip API calls if sidebar is not visible or window is unfocused
+    if (!this.isActive()) {
+      console.log('[PipelinePoller] Skipping tick - sidebar hidden or window unfocused');
       return;
     }
 

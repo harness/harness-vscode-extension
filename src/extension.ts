@@ -115,8 +115,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Wire up visibility tracking to pause/resume polling
   sidebarProvider.onVisibilityChange((visible) => {
     logger.debug('Extension', `Sidebar visibility changed: ${visible}`);
-    poller?.setVisible(visible);
+    poller?.setSidebarVisible(visible);
   });
+
+  // Wire up window focus tracking to pause/resume polling
+  context.subscriptions.push(
+    vscode.window.onDidChangeWindowState((state) => {
+      logger.debug('Extension', `Window focus changed: ${state.focused}`);
+      poller?.setWindowFocused(state.focused);
+    })
+  );
 
   async function startPoller(): Promise<void> {
     poller?.dispose();
@@ -134,6 +142,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     currentClient = new HarnessClient(config);
     poller = new PipelinePoller(currentClient, config, diagnostics, bridge, outputChannel);
     poller.start();
+
+    // Initialize poller with current window focus state
+    poller.setWindowFocused(vscode.window.state.focused);
   }
 
   // Route webview messages back to VS Code commands
