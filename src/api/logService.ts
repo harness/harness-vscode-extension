@@ -12,15 +12,28 @@ let tokenExpiresAt = 0;
 async function getLogToken(config: HarnessConfig): Promise<string | null> {
   if (cachedToken && Date.now() < tokenExpiresAt) return cachedToken;
   try {
-    const res = await fetch(
-      `${config.baseUrl}/log-service/token?accountID=${encodeURIComponent(config.accountIdentifier)}`,
-      { headers: { 'x-api-key': config.apiKey } }
-    );
-    if (!res.ok) return null;
-    const text = await res.text();
-    cachedToken = text.replace(/^"|"$/g, '').trim();
-    tokenExpiresAt = Date.now() + 20 * 60 * 1000;
-    return cachedToken;
+    // Add timeout to prevent hanging forever
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout for token fetch
+
+    try {
+      const res = await fetch(
+        `${config.baseUrl}/log-service/token?accountID=${encodeURIComponent(config.accountIdentifier)}`,
+        {
+          headers: { 'x-api-key': config.apiKey },
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timeoutId);
+      if (!res.ok) return null;
+      const text = await res.text();
+      cachedToken = text.replace(/^"|"$/g, '').trim();
+      tokenExpiresAt = Date.now() + 20 * 60 * 1000;
+      return cachedToken;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      return null;
+    }
   } catch { return null; }
 }
 
@@ -162,29 +175,41 @@ export async function fetchStepLogs(
       `?accountID=${encodeURIComponent(config.accountIdentifier)}` +
       `&prefix=${encodeURIComponent(logBaseKey)}`;
 
+    // Add timeout to prevent hanging forever
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+    try {
       const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'x-api-key': config.apiKey, 'content-type': 'application/json' },
-    });
+        method: 'POST',
+        headers: { 'x-api-key': config.apiKey, 'content-type': 'application/json' },
+        signal: controller.signal,
+      });
 
-    if (res.ok) {
-      const text = await res.text();
-      let downloadUrl: string | null = null;
-      try {
-        const json = JSON.parse(text) as Record<string, unknown>;
-        downloadUrl = (json.link ?? json.url ?? json.resource ?? json.data) as string | null;
-      } catch {
-        downloadUrl = text.trim().replace(/^"|"$/g, '');
-      }
+      if (res.ok) {
+        const text = await res.text();
+        let downloadUrl: string | null = null;
+        try {
+          const json = JSON.parse(text) as Record<string, unknown>;
+          downloadUrl = (json.link ?? json.url ?? json.resource ?? json.data) as string | null;
+        } catch {
+          downloadUrl = text.trim().replace(/^"|"$/g, '');
+        }
 
-      if (downloadUrl?.startsWith('http')) {
-        const dlRes = await fetch(downloadUrl);
-        if (dlRes.ok) {
-          const buf = Buffer.from(await dlRes.arrayBuffer());
-          const lines = await decompressAndParse(buf);
-          if (lines.length > 0) return lines;
+        if (downloadUrl?.startsWith('http')) {
+          const dlRes = await fetch(downloadUrl, { signal: controller.signal });
+          if (dlRes.ok) {
+            const buf = Buffer.from(await dlRes.arrayBuffer());
+            const lines = await decompressAndParse(buf);
+            clearTimeout(timeoutId);
+            if (lines.length > 0) return lines;
+          }
         }
       }
+      clearTimeout(timeoutId);
+    } catch (err) {
+      clearTimeout(timeoutId);
+      // Fall through to stream
     }
   } catch { /* fall through to stream */ }
 
@@ -193,12 +218,24 @@ export async function fetchStepLogs(
     const token = await getLogToken(config);
     if (token) {
       const qs  = new URLSearchParams({ accountID: config.accountIdentifier, key: logBaseKey }).toString();
-      const res = await fetch(`${config.baseUrl}/log-service/stream?${qs}`, {
-        headers: { 'X-Harness-Token': token },
-      });
-      if (res.ok) {
-        const lines = parseLogLines(await res.text());
-        if (lines.length > 0) return lines.slice(-200);
+
+      // Add timeout to prevent hanging forever
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+      try {
+        const res = await fetch(`${config.baseUrl}/log-service/stream?${qs}`, {
+          headers: { 'X-Harness-Token': token },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const lines = parseLogLines(await res.text());
+          if (lines.length > 0) return lines.slice(-200);
+        }
+      } catch (err) {
+        clearTimeout(timeoutId);
+        // Fall through
       }
     }
   } catch { /* silent */ }
