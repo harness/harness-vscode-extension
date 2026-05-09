@@ -18,6 +18,43 @@ See pipeline status, investigate failures, and approve deployments right in your
 
 ## 🚀 Quick Start
 
+### For Users (Install from Release)
+
+1. Download the latest `.vsix` file from [Releases](https://github.com/harness/harness-vscode-extension/releases)
+
+2. **Install in VS Code**
+
+   **Option A: Using the UI**
+   - Open the Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`)
+   - Click the `...` menu at the top → **Install from VSIX...**
+   - Select the downloaded `.vsix` file
+   - Reload VS Code when prompted
+
+   **Option B: Using the CLI**
+   ```bash
+   code --install-extension harness-vscode-0.x.x.vsix
+   ```
+
+3. **Install in Cursor**
+
+   **Option A: Using the Command Palette (Easiest)**
+   - Open Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+   - Type **Extensions: Install from VSIX...**
+   - Select the downloaded `.vsix` file
+   - Reload Cursor when prompted
+
+   **Option B: Drag and Drop**
+   - Open the Extensions panel (click the extensions icon in the left sidebar)
+   - Drag and drop the `.vsix` file directly into the Cursor Extensions panel
+   - Reload Cursor when prompted
+
+   **Option C: Using the CLI**
+   ```bash
+   cursor --install-extension harness-vscode-0.x.x.vsix
+   ```
+
+4. Run **Harness: Configure API Key** to get started
+
 ### For Developers (Build from Source)
 
 ```bash

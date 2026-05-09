@@ -8,20 +8,31 @@ export async function rerunPipeline(
   // Harness API endpoint for re-running a pipeline execution with original inputs (v2)
   const url = `${config.baseUrl}/pipeline/api/pipelines/execution/rerun/v2/${encodeURIComponent(planExecutionId)}/${encodeURIComponent(pipelineIdentifier)}?accountIdentifier=${encodeURIComponent(config.accountIdentifier)}&orgIdentifier=${encodeURIComponent(config.orgIdentifier)}&projectIdentifier=${encodeURIComponent(config.projectIdentifier)}&useOriginalPipelineYamlOnRerun=true`;
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/yaml',
-      'x-api-key': config.apiKey,
-    },
-    body: '',
-  });
+  // Add timeout to prevent hanging
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout for pipeline rerun
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/yaml',
+        'x-api-key': config.apiKey,
+      },
+      body: '',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    return data?.data ?? data;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
   }
-
-  const data = await res.json();
-  return data?.data ?? data;
 }

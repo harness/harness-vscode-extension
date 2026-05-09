@@ -97,6 +97,10 @@ export async function initFmeClient(sdkKey: string | undefined, config: HarnessC
       },
       scheduler: {
         featuresRefreshRate: 60, // Poll every 60 seconds
+        impressionsRefreshRate: 60, // Send impressions every 60 seconds
+      },
+      sync: {
+        impressionsMode: 'OPTIMIZED', // Reduce spam
       },
       debug: false, // Disable debug logs
     });

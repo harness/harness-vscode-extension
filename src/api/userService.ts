@@ -15,23 +15,37 @@ export async function getCurrentUser(config: HarnessConfig): Promise<HarnessCurr
     const qs = new URLSearchParams({ accountIdentifier: config.accountIdentifier });
     const url = `${config.baseUrl}/ng/api/user/currentUser?${qs}`;
     console.log('[Harness] getCurrentUser →', url);
-    const res = await fetch(url, {
-      headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
-    });
-    console.log('[Harness] getCurrentUser HTTP', res.status);
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      console.warn('[Harness] getCurrentUser failed:', text.slice(0, 200));
+
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+    try {
+      const res = await fetch(url, {
+        headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      console.log('[Harness] getCurrentUser HTTP', res.status);
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.warn('[Harness] getCurrentUser failed:', text.slice(0, 200));
+        return null;
+      }
+      const json = await res.json();
+      console.log('[Harness] getCurrentUser payload:', JSON.stringify(json?.data));
+      const u = json?.data;
+      if (!u?.uuid) {
+        console.warn('[Harness] getCurrentUser: no uuid in response');
+        return null;
+      }
+      return { uuid: u.uuid, email: u.email ?? '', name: u.name ?? '' };
+    } catch (e) {
+      clearTimeout(timeoutId);
+      console.error('[Harness] getCurrentUser exception:', e);
       return null;
     }
-    const json = await res.json();
-    console.log('[Harness] getCurrentUser payload:', JSON.stringify(json?.data));
-    const u = json?.data;
-    if (!u?.uuid) {
-      console.warn('[Harness] getCurrentUser: no uuid in response');
-      return null;
-    }
-    return { uuid: u.uuid, email: u.email ?? '', name: u.name ?? '' };
   } catch (e) {
     console.error('[Harness] getCurrentUser exception:', e);
     return null;
@@ -72,19 +86,33 @@ async function isUserInGroup(
 
     const url = `${config.baseUrl}/ng/api/user-groups/${encodeURIComponent(groupId)}/member/${encodeURIComponent(userUuid)}?${new URLSearchParams(qs)}`;
     console.log('[Harness] isUserInGroup →', url);
-    const res = await fetch(url, {
-      headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
-    });
-    console.log('[Harness] isUserInGroup HTTP', res.status, 'for group', rawGroupId);
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      console.warn('[Harness] isUserInGroup failed:', text.slice(0, 200));
+
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+    try {
+      const res = await fetch(url, {
+        headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      console.log('[Harness] isUserInGroup HTTP', res.status, 'for group', rawGroupId);
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.warn('[Harness] isUserInGroup failed:', text.slice(0, 200));
+        return false;
+      }
+      const json = await res.json();
+      console.log('[Harness] isUserInGroup payload:', JSON.stringify(json?.data));
+      // Response data is a boolean: true if member
+      return json?.data === true;
+    } catch (e) {
+      clearTimeout(timeoutId);
+      console.error('[Harness] isUserInGroup exception:', e);
       return false;
     }
-    const json = await res.json();
-    console.log('[Harness] isUserInGroup payload:', JSON.stringify(json?.data));
-    // Response data is a boolean: true if member
-    return json?.data === true;
   } catch (e) {
     console.error('[Harness] isUserInGroup exception:', e);
     return false;

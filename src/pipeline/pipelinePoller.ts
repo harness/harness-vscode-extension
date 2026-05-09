@@ -17,6 +17,21 @@ const TERMINAL_STATUSES = new Set([
   'SUCCESS', 'FAILED', 'ABORTED', 'EXPIRED', 'IGNOREFAILED', 'POLICY_EVALUATION_FAILURE'
 ]);
 
+/**
+ * Create a simple hash of execution graph to detect changes
+ * Tracks status of all nodes to detect step-level updates
+ */
+function hashExecutionGraph(graph: ExecutionGraph | null): string {
+  if (!graph?.nodeMap) return 'empty';
+
+  const nodeStatuses = Object.entries(graph.nodeMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, node]) => `${id}:${node.status}`)
+    .join('|');
+
+  return nodeStatuses;
+}
+
 interface ExecutionSummaryResponse {
   data?: { content?: ExecutionSummary[] };
 }
@@ -35,14 +50,19 @@ export class PipelinePoller implements vscode.Disposable {
   private lastTrackedSha: string | null = null;
   private waitingSince: number | null = null; // when we started waiting for an execution
   private lastExecutionData: { execution: ExecutionDetail; executionGraph: ExecutionGraph | null } | null = null;
+  private lastGraphHash: string | null = null; // Track execution graph changes
 
   // Track detail execution being viewed (for polling running executions in history detail mode)
   private detailExecutionId: string | null = null;
   private detailLastStatus: string | null = null;
+  private detailLastGraphHash: string | null = null; // Track detail execution graph changes
 
   // Visibility tracking - pause polling when sidebar is hidden or window unfocused
   private isSidebarVisible: boolean = false;
   private isWindowFocused: boolean = true; // Assume focused initially
+
+  // Re-entrancy guard - prevent concurrent tick() executions
+  private isTickRunning: boolean = false;
 
   constructor(
     private readonly client: HarnessClient,
@@ -52,16 +72,45 @@ export class PipelinePoller implements vscode.Disposable {
     private readonly outputChannel?: vscode.OutputChannel
   ) {}
 
-  start(): void {
+  async start(): Promise<void> {
     this.watchGit();
+    // Send initial GIT_CONTEXT when poller starts
+    await this.sendGitContext();
     this.tick();
   }
 
   /** Called by the refresh button in the webview. */
   refresh(): void {
     this.lastStatus = null;
+    this.lastGraphHash = null;
     this.stopTimer();
     this.tick();
+  }
+
+  /**
+   * Send GIT_CONTEXT to webview with current git state, config, and theme settings.
+   * Called on initialization and when git/config/theme changes.
+   */
+  async sendGitContext(): Promise<void> {
+    const ctx = await getGitContext();
+    const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'thisCommit');
+    const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('../fme/fmeClient');
+    const logViewerVariation = await getLogViewerVariation();
+    const webviewTheme = getWebviewThemeVariation();
+    const aiChatEnabled = getAiChatEnabled();
+    const ideThemeKind = vscode.window.activeColorTheme.kind;
+
+    this.webview.send({
+      type: 'GIT_CONTEXT',
+      ctx,
+      org: this.config.orgIdentifier,
+      project: this.config.projectIdentifier,
+      defaultView,
+      logViewerVariation,
+      webviewTheme,
+      ideThemeKind,
+      aiChatEnabled
+    });
   }
 
   /**
@@ -126,15 +175,19 @@ export class PipelinePoller implements vscode.Disposable {
       };
       rootUri: vscode.Uri;
     }) => {
-      return repo.state.onDidChange(() => {
+      return repo.state.onDidChange(async () => {
         const newSha = repo.state.HEAD?.commit;
         if (!newSha || newSha === this.lastTrackedSha) return;
 
         this.lastTrackedSha = newSha;
         this.lastStatus = null;
+        this.lastGraphHash = null;
         this.lastPlanExecutionId = null;
         this.waitingSince = Date.now();
         this.diagnostics.clearAll();
+
+        // Send updated GIT_CONTEXT when git state changes
+        await this.sendGitContext();
 
         this.stopTimer();
         this.tick();
@@ -158,30 +211,30 @@ export class PipelinePoller implements vscode.Disposable {
   }
 
   private async tick(): Promise<void> {
+    // Prevent concurrent executions - if tick is already running, skip this call
+    if (this.isTickRunning) {
+      console.log('[PipelinePoller] Skipping tick - already running');
+      return;
+    }
+
     // Skip API calls if sidebar is not visible or window is unfocused
     if (!this.isActive()) {
       console.log('[PipelinePoller] Skipping tick - sidebar hidden or window unfocused');
       return;
     }
 
+    console.log('[PipelinePoller] ▶ Tick starting');
+    this.isTickRunning = true;
     try {
       const ctx = await getGitContext();
 
-      // Always send GIT_CONTEXT with org/project info (even without git repo)
-      const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'thisCommit');
-      const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('../fme/fmeClient');
-      const logViewerVariation = await getLogViewerVariation();
-      const webviewTheme = getWebviewThemeVariation();
-      const aiChatEnabled = getAiChatEnabled();
-      const ideThemeKind = vscode.window.activeColorTheme.kind;
-      console.log('[Poller] Sending GIT_CONTEXT with theme:', {
-        webviewTheme,
-        ideThemeKind,
-        ideThemeName: ideThemeKind === 1 ? 'Light' : ideThemeKind === 2 ? 'Dark' : ideThemeKind === 3 ? 'HighContrast' : 'HighContrastLight',
-        hasGitContext: !!ctx,
-        aiChatEnabled
-      });
-      this.webview.send({ type: 'GIT_CONTEXT', ctx, org: this.config.orgIdentifier, project: this.config.projectIdentifier, defaultView, logViewerVariation, webviewTheme, ideThemeKind, aiChatEnabled });
+      // GIT_CONTEXT is sent only when something actually changes:
+      // - On initialization (extension.ts startPoller)
+      // - When FME flags update (fmeClient.ts SDK_UPDATE callback)
+      // - When git changes (git watcher onDidChange)
+      // - When theme changes (extension.ts theme listener)
+      // - When config changes (extension.ts config handlers)
+      // No need to spam it every tick when nothing has changed
 
       // Track if any execution is running (live or detail)
       let anyRunning = false;
@@ -202,10 +255,12 @@ export class PipelinePoller implements vscode.Disposable {
             detailExec.status = currentStatus;
             const isTerminal = TERMINAL_STATUSES.has(currentStatus);
             const harnessUrl = this.buildExecutionUrl(detailExec);
+            const currentGraphHash = hashExecutionGraph(detailGraph ?? null);
 
-            // Only send update if status changed (to avoid constant re-renders)
-            if (currentStatus !== this.detailLastStatus) {
+            // Send update if status OR graph changed (to catch step-level updates)
+            if (currentStatus !== this.detailLastStatus || currentGraphHash !== this.detailLastGraphHash) {
               this.detailLastStatus = currentStatus;
+              this.detailLastGraphHash = currentGraphHash;
               await dispatchModules(
                 detailExec, detailGraph ?? null,
                 this.client, this.config, this.diagnostics, this.webview,
@@ -255,9 +310,11 @@ export class PipelinePoller implements vscode.Disposable {
       }
 
       if (!ctx) {
+        console.log('[PipelinePoller] No git context, sending NO_EXECUTION');
         this.webview.send({ type: 'NO_EXECUTION', ctx: null });
 
         // Schedule next poll based on whether detail execution is running
+        console.log('[PipelinePoller] No git context - scheduling based on anyRunning:', anyRunning);
         if (anyRunning) {
           this.scheduleActive();
         } else {
@@ -291,7 +348,8 @@ export class PipelinePoller implements vscode.Disposable {
         }
 
         // If we recently got a new commit, keep polling at 1s for up to WAITING_TIMEOUT_MS
-        if (this.waitingSince && (Date.now() - this.waitingSince) < WAITING_TIMEOUT_MS) {
+        // OR if detail execution is running, keep polling actively
+        if ((this.waitingSince && (Date.now() - this.waitingSince) < WAITING_TIMEOUT_MS) || anyRunning) {
           this.scheduleActive();
         } else {
           this.waitingSince = null;
@@ -309,6 +367,7 @@ export class PipelinePoller implements vscode.Disposable {
         if (match.planExecutionId !== this.lastPlanExecutionId) {
           this.lastPlanExecutionId = match.planExecutionId;
           this.lastStatus = null;
+          this.lastGraphHash = null;
           this.diagnostics.clearAll();
         }
 
@@ -347,9 +406,12 @@ export class PipelinePoller implements vscode.Disposable {
         });
 
         const harnessUrl = this.buildExecutionUrl(execDetail);
+        const currentGraphHash = hashExecutionGraph(execGraph ?? null);
 
-        if (currentStatus !== this.lastStatus) {
+        // Send update if status OR graph changed (to catch step-level updates)
+        if (currentStatus !== this.lastStatus || currentGraphHash !== this.lastGraphHash) {
           this.lastStatus = currentStatus;
+          this.lastGraphHash = currentGraphHash;
           await dispatchModules(
             execDetail, execGraph ?? null,
             this.client, this.config, this.diagnostics, this.webview,
@@ -397,19 +459,24 @@ export class PipelinePoller implements vscode.Disposable {
 
       console.log('[PipelinePoller] Scheduling decision:', {
         anyRunning,
-        action: anyRunning ? 'scheduleActive (1s)' : 'stopTimer'
+        hasDetailExec: !!this.detailExecutionId,
+        action: anyRunning ? 'scheduleActive (1s)' : 'scheduleHeartbeat (120s)'
       });
 
       if (anyRunning) {
         this.scheduleActive();
       } else {
-        // Terminal — stop polling. Webview will show a refresh button.
-        this.stopTimer();
+        // Terminal — schedule slow heartbeat to stay responsive for git changes, detail execution switches, etc.
+        this.scheduleHeartbeat();
       }
 
     } catch (error) {
+      console.error('[PipelinePoller] ✗ Tick error:', error);
       handleApiError(error, 'PipelinePoller.tick');
       this.scheduleHeartbeat();
+    } finally {
+      console.log('[PipelinePoller] ◼ Tick complete, releasing lock');
+      this.isTickRunning = false;
     }
   }
 
@@ -442,6 +509,7 @@ export class PipelinePoller implements vscode.Disposable {
   setDetailExecution(planExecutionId: string): void {
     this.detailExecutionId = planExecutionId;
     this.detailLastStatus = null;
+    this.detailLastGraphHash = null;
     // Start polling immediately
     this.refresh();
   }
@@ -452,6 +520,7 @@ export class PipelinePoller implements vscode.Disposable {
   clearDetailExecution(): void {
     this.detailExecutionId = null;
     this.detailLastStatus = null;
+    this.detailLastGraphHash = null;
   }
 
   dispose(): void {

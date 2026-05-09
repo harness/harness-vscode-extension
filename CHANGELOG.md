@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.3] - 2026-05-09
+
+### Fixed
+- **Critical poller stability issues**: Resolved multiple issues causing pipeline updates to stop
+  - Added 10-30s timeouts to all network requests to prevent indefinite hangs
+  - Implemented re-entrancy guard to prevent concurrent tick() executions
+  - Fixed terminal execution behavior: now schedules heartbeat (120s) instead of stopping completely
+  - Fixed scheduling logic to keep polling active when detail executions are running
+  - Prevented 25-second UI freezes when fetching step logs (now non-blocking)
+  - Fixed FME SDK callbacks creating race conditions (now run in background)
+  - Fixed log editor tabs stealing sidebar focus and pausing updates (preserveFocus: true)
+  - Fixed poller stopping when no matching live execution found (early return scheduling bug)
+
+### Changed
+- **Optimized GIT_CONTEXT messaging**: Reduced from every-second spam to only-on-change
+  - Extracted to `sendGitContext()` method, only called when git/config/FME changes
+  - Removes unnecessary webview re-renders and console noise
+- **Removed automatic log streaming**: Logs now fetched only on-demand when user clicks a step
+  - Reduces API calls and network traffic
+  - Logs still available instantly via on-demand fetch with editor tab display
+- **Reduced FME debug logging**: Disabled Split.io debug logs, switched to OPTIMIZED impression mode
+  - Cleaner console output focused on application messages
+
+### Documentation
+- Added installation instructions for end users in README
+  - Installation from GitHub Releases via UI or CLI
+  - Clearer distinction between user installation and developer build
+
 ## [0.1.2] - 2026-05-08
 
 ### Added

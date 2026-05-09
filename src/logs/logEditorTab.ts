@@ -128,7 +128,7 @@ export async function openLogAsEditorTab(
 
   await vscode.window.showTextDocument(doc, {
     viewColumn: vscode.ViewColumn.Two,
-    preserveFocus: false,
+    preserveFocus: true, // Keep sidebar visible/focused so poller continues
     preview: false,
   });
 

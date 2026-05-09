@@ -83,27 +83,10 @@ export async function dispatchModules(
       // Expanded mode: don't pre-fetch logs
       // Logs will be fetched on-demand when user clicks a step
       // and will open in editor tab instead of webview
-    } else {
-      // Still running — stream active step logs
-      const activeSteps = findActiveSteps(executionGraph);
-      if (activeSteps.length > 0) {
-        for (const step of activeSteps) {
-          const nodeId = step.uuid ?? step.identifier ?? step.name;
-          streamLogs(config, planExecutionId,
-            { nodeId, logBaseKey: step.logBaseKey, status: step.status },
-            webview
-          );
-        }
-      } else {
-        const activeStage = findActiveStage(layoutNodeMap);
-        if (activeStage) {
-          streamLogs(config, planExecutionId,
-            { nodeId: activeStage.nodeUuid, logBaseKey: activeStage.logBaseKey, status: activeStage.status },
-            webview
-          );
-        }
-      }
     }
+    // Note: For running executions, logs are fetched on-demand when the user clicks a step
+    // (handled by the fetchStepLogs message handler in extension.ts)
+    // Automatic streaming was removed to prevent API spam and unnecessary log fetching
   }
 
   // CD: deployment status

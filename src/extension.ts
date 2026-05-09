@@ -73,30 +73,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (currentConfig) {
     // Wait for FME to be ready (with timeout) so sidebar gets correct theme
     try {
-      await initFmeClient(fmeSdkKey, currentConfig, async () => {
+      await initFmeClient(fmeSdkKey, currentConfig, () => {
         // Callback when FME flags update - send new GIT_CONTEXT to webview
-        logger.debug('FME', 'Flags updated, sending new GIT_CONTEXT to webview');
-        const ctx = await gitCtx.getGitContext();
-        const config = await configManager.getConfig();
-        if (config) {
-          const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'pipelines');
-          const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('./fme/fmeClient');
-          const logViewerVariation = await getLogViewerVariation();
-          const webviewTheme = getWebviewThemeVariation();
-          const aiChatEnabled = getAiChatEnabled();
-          const ideThemeKind = vscode.window.activeColorTheme.kind;
-          bridge.send({
-            type: 'GIT_CONTEXT',
-            ctx,
-            org: config.orgIdentifier,
-            project: config.projectIdentifier,
-            defaultView,
-            logViewerVariation,
-            webviewTheme,
-            ideThemeKind,
-            aiChatEnabled,
-          });
-        }
+        // Run in background to avoid blocking poller or creating race conditions
+        (async () => {
+          logger.debug('FME', 'Flags updated, sending new GIT_CONTEXT to webview');
+          const ctx = await gitCtx.getGitContext();
+          const config = await configManager.getConfig();
+          if (config) {
+            const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'pipelines');
+            const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('./fme/fmeClient');
+            const logViewerVariation = await getLogViewerVariation();
+            const webviewTheme = getWebviewThemeVariation();
+            const aiChatEnabled = getAiChatEnabled();
+            const ideThemeKind = vscode.window.activeColorTheme.kind;
+            bridge.send({
+              type: 'GIT_CONTEXT',
+              ctx,
+              org: config.orgIdentifier,
+              project: config.projectIdentifier,
+              defaultView,
+              logViewerVariation,
+              webviewTheme,
+              ideThemeKind,
+              aiChatEnabled,
+            });
+          }
+        })().catch(err => {
+          logger.warn('FME', 'Failed to send updated GIT_CONTEXT:', err);
+        });
       });
     } catch (err) {
       logger.warn('FME', 'Failed to initialize:', err);
@@ -216,7 +221,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       const msg = m as any;
       if (msg.logBaseKey && msg.nodeId) {
-        await fetchStepLogsOnDemand(currentConfig, bridge, logProvider, msg.logBaseKey, msg.nodeId, msg.stepName, msg.stageName, msg.pipelineName, msg.planExecutionId, msg.status, msg.durationMs);
+        // Run log fetch in background - don't block message handler or poller
+        fetchStepLogsOnDemand(currentConfig, bridge, logProvider, msg.logBaseKey, msg.nodeId, msg.stepName, msg.stageName, msg.pipelineName, msg.planExecutionId, msg.status, msg.durationMs);
       }
     } else if (m.type === 'setDefaultView') {
       const msg = m as any;
