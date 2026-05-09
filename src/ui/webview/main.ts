@@ -11,7 +11,7 @@ let renderScheduled = false;
 let lastRenderFingerprint = '';
 let lastRenderTime = 0;
 let timerInterval: NodeJS.Timeout | null = null;
-const MIN_RENDER_INTERVAL_MS = 2000; // Minimum 2 seconds between renders to reduce flicker
+const MIN_RENDER_INTERVAL_MS = 5000; // Minimum 5 seconds between automatic renders to reduce flicker
 
 function getStateFingerprint(): string {
   // Generate a fingerprint of render-relevant state to detect actual changes
@@ -36,6 +36,10 @@ function getStateFingerprint(): string {
     state.currentCommitFilter.toString(),
     state.executionsSort,
     state.menuOpen.toString(),
+    // AI state
+    state.aiShowToolPicker.toString(),
+    state.aiState,
+    state.aiOverlay || '',
   ];
 
   // Add execution state with detailed stage/step tracking

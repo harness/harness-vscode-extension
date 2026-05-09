@@ -1,305 +1,174 @@
-# Harness Pipeline — VS Code Extension
+# Harness VS Code Extension
 
-See your Harness pipeline status, logs, and security results without leaving your editor.
+**Monitor your CI/CD pipelines, view logs, and manage approvals — all without leaving your IDE.**
 
----
-
-## What it does
-
-Monitor all your Harness pipelines and executions directly in VS Code. The extension surfaces pipeline status, execution details, stages, steps, logs, test results, security findings, policy evaluations, and approval gates — all in the sidebar.
-
-**Plus:** Ask questions about your pipelines using **Claude Code** with automatic context injection via MCP.
-
-No tab switching. No copy-pasting execution IDs. No context-switching to investigate failures.
+See pipeline status, investigate failures, and approve deployments right in your sidebar.
 
 ---
 
-## Requirements
+## ✨ Features
 
-- VS Code 1.85+
-- Node.js 18+
-- A Harness account with at least one pipeline configured
-- A Harness Personal Access Token (PAT)
+- 📊 **Real-time pipeline status** — See all your pipelines and executions
+- 📝 **Syntax-highlighted logs** — View step logs in editor tabs with full syntax highlighting
+- ✅ **Approve deployments** — Handle approval gates without leaving your editor
+- 🔍 **Search & filter** — Find pipelines and executions quickly
+- 🤖 **AI integration** — Ask Claude Code or Cursor AI about your pipeline failures (with automatic context)
 
 ---
 
-## Building from Source
+## 🚀 Quick Start
 
-### Dependencies
-
-Install all dependencies (includes `esbuild`, `typescript`, and `@vscode/vsce`):
+### For Developers (Build from Source)
 
 ```bash
+# Clone and install
+git clone https://github.com/harness/harness-vscode-extension
+cd harness-vscode-extension
 npm install
-```
 
-### Compile
-
-```bash
+# Build
 npm run compile
+
+# Run in VS Code
+# Press F5 to launch Extension Development Host
+
+# Package for distribution
+npm run package
+# Creates harness-vscode-0.x.x.vsix
 ```
 
-This runs esbuild and outputs:
-- `dist/extension.js` — extension host bundle (CJS)
-- `dist/webview.js` — webview bundle
-- `dist/webview.css` — webview styles
-
-To watch for changes during development:
-
-```bash
-npm run watch
-```
-
-### Run in VS Code
-
-Press **F5** in VS Code to launch an Extension Development Host with the extension loaded. The `compile` step runs automatically as a pre-launch task.
-
-### Package as `.vsix`
-
-First install the packaging tool globally if you haven't:
-
-```bash
-npm install -g @vscode/vsce
-```
-
-Then build and package:
-
-```bash
-npm run compile && npm run package
-```
-
-This produces `harness-vscode-0.x.x.vsix`, which can be installed via **Extensions: Install from VSIX** in the Command Palette.
+**Requirements:** VS Code 1.85+, Node.js 18+
 
 ---
 
-## Setup
+## 📖 Usage
 
-### First-time setup (global configuration)
+### View Modes
 
-1. Open the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
-2. Run **Harness: Configure API Key**
-3. Enter your Harness base URL (default: `https://app.harness.io`)
-4. Enter your PAT — get it from **Account Settings → Access Management → API Keys**
-5. Enter your Account ID — found at **Account Settings → Overview**
-6. Select your organization from the dropdown
-7. Select your project from the dropdown
+Switch between two views using the tabs at the top:
 
-**All settings are saved globally** — they work across all workspaces and even without a workspace folder open. Your PAT is stored securely in VS Code's secret store.
+**Pipelines** — Browse all your pipelines
+- Search, filter, and pin your favorite pipelines
+- Click any pipeline to see its latest execution
+- Works without a git repository
 
-### Per-workspace override (optional)
+**Executions** — Browse execution history
+- Filter by status (All / Failed / Passed)
+- Filter by pipeline to see specific execution history
+- Paginated view with 10-15 executions per page
+- Click any execution for full details and logs
 
-If you work on multiple projects in different workspace folders, you can override the global settings for specific workspaces:
+### Key Features
 
-1. Open the workspace where you want a different project
-2. Run **Harness: Switch Project (This Workspace)** from the Command Palette
-3. Select a different org and project
+**Logs** — Click any step to open its logs in a separate editor tab with syntax highlighting. Failed steps are highlighted for quick identification.
 
-The workspace-specific settings override your global settings for that workspace only. Close the workspace, and the extension falls back to your global settings.
+**Approvals** — When a pipeline needs approval, **✓ Approve** and **✕ Reject** buttons appear. The extension checks your permissions automatically.
 
-**To change global settings:** Run **Harness: Select Org & Project**
+**Policy Evaluations** — See OPA policy results with warnings and errors highlighted.
 
----
-
-## Feature Flags (FME)
-
-The extension ships with a default Harness Feature Management Engine (FME) SDK key that enables feature flag-gated UX variations for all users. **No configuration needed!**
-
-### Available FME-Gated Features
-
-- **Log Viewer Mode** (`vscode-log-experience`):
-  - `inline` — Logs displayed in collapsible tree within sidebar
-  - `expanded` (default) — Logs open in separate editor tab with syntax highlighting
-  
-- **UI Theme** (`vscode-bar-experience`):
-  - `simple` — Minimal theme using VS Code color variables
-  - `enhanced` (default) — Cards-based UI with OKLCH color system, light/dark auto-detection, and polished animations
-
-- **AI Chat** (`vscode-mcp-integration`):
-  - `off` — AI chat footer hidden
-  - `on` — AI chat footer visible, enables Claude Code integration
-
-### For Developers (Testing Custom Flags)
-
-If you want to test with your own FME environment during development:
-
-1. Get your FME SDK key from Harness:
-   - Navigate to: **Account Settings → Feature Flags → Environments → SDK Keys**
-   - Create a new **Client SDK Key** (or use an existing one)
-   - Copy the key (starts with `client-`)
-
-2. Add it to `.vscode/launch.json`:
-   ```json
-   {
-     "version": "0.2.0",
-     "configurations": [{
-       "name": "Run Extension",
-       "env": {
-         "HARNESS_FME_SDK_KEY": "client-your-key-here"
-       }
-     }]
-   }
-   ```
-
-3. Press **F5** — your custom key overrides the default
-
-**Alternative:** Set `harness.fmeSdkKey` in VS Code user settings to override globally.
+**Workspace Override** — Working on multiple projects? Use **Harness: Switch Project (This Workspace)** to set different org/project per workspace folder.
 
 ---
 
-## AI Integration (Claude Code)
+## 🤖 AI Integration
 
-Ask questions about your pipeline executions using **Claude Code** (CLI or Extension) with Harness-specific context automatically included via Model Context Protocol (MCP).
+Ask questions about your pipelines using **Claude Code** or **Cursor AI** with automatic context injection.
+
+### Supported AI Tools
+
+**Claude Code** (CLI or Extension)
+- Install from [claude.ai/code](https://claude.ai/code)
+- **CLI mode**: Fully automated — responses appear directly in Harness sidebar
+- **Extension mode**: Semi-automated — auto-opens Claude Code panel with prompt ready
+- Uses local MCP server configuration (`~/.claude.json`)
+
+**Cursor AI**
+- Auto-detected when running in Cursor editor
+- **Recommended**: Install [Harness Cursor Plugin](https://cursor.com/plugins) — OAuth authentication, zero config
+- **Fallback**: Local MCP configuration (harness-mcp-v2) for advanced users
+- Seamless prompt delivery with auto-paste
 
 ### Setup
 
-1. **Install Claude Code** (choose one):
-   - **CLI**: Install from [claude.ai/code](https://claude.ai/code)
-   - **VS Code Extension**: Install [Claude Code Extension](https://marketplace.visualstudio.com/items?itemName=Anthropic.claude-code) from the marketplace
+**For Claude Code:**
+1. Install Claude Code (CLI or VS Code Extension)
+2. Click **Configure MCP** in the AI footer
+3. Your Harness credentials are automatically configured in `~/.claude.json`
+4. Restart Claude Code to activate the MCP server
 
-2. **Configure MCP** (one-time):
-   - Click **Configure MCP** in the AI footer (appears when AI chat is enabled via FME)
-   - Your Harness PAT and account details are automatically copied to `~/.claude.json`
-   - Restart Claude Code to activate the Harness MCP server
+**For Cursor:**
+1. **Recommended**: Install [Harness Plugin](https://cursor.com/plugins) in Cursor
+   - OAuth authentication — no manual configuration needed
+   - Plugin manages MCP connection automatically
+2. **Alternative**: Configure local MCP manually (for advanced users)
 
-3. **Select your preferred tool**:
-   - Click the tool picker in the AI footer to switch between CLI and Extension
-   - Your choice persists across VS Code sessions
+### Usage
 
-### Using AI Integration
+- Type your question in the AI footer (appears when AI integration is enabled)
+- Select your preferred tool using the dropdown (Claude Code CLI / Extension / Cursor)
+- Tool preference persists across VS Code sessions
+- Pipeline context automatically included in every query
 
-**With CLI (fully automated):**
-- Ask a question in the AI footer
-- Claude CLI runs in background with pipeline context
-- Response appears directly in the Harness sidebar
-
-**With Extension (semi-automated):**
-- Ask a question in the AI footer
-- Claude Code Extension opens automatically (even if closed)
-- New conversation starts with your question copied to clipboard
-- Click **"Paste Now"** button to paste and send
-- Continue the conversation in Claude Code panel
-
-**What context is included:**
+**What context gets sent:**
 - Pipeline name, status, execution ID
-- Current git branch and commit SHA
-- Stage list with status, duration, and error messages
-- Org/Project identifiers
 - Harness execution URL
 
-Claude Code can use the **Harness MCP server** to fetch full execution details, logs, and other data via API.
+**Example questions:**
+- "Why did this pipeline fail?"
+- "What changed between this run and the last successful one?"
+- "How can I fix the failing test in the build stage?"
 
 ---
 
-## View Modes
+## ⚙️ Configuration
 
-The extension offers two view modes, accessible via tabs at the top:
+### Global Settings (apply everywhere)
 
-### Pipelines
+Run **Harness: Configure API Key** to set:
+- `harness.baseUrl` — Your Harness instance URL (default: `https://app.harness.io`)
+- `harness.accountIdentifier` — Your account ID
+- `harness.orgIdentifier` — Default organization
+- `harness.projectIdentifier` — Default project
 
-Browse and manage all pipelines in your project:
-- **Search pipelines** by name or type
-- **Filter by status**: All / Failed / Running / Waiting for Approval
-- **Sort** by name, recent activity, or pinned status
-- **Pin pipelines** to keep your most-used ones at the top
-- **Click any pipeline** to view its most recent execution with full details, logs, and stage breakdown
-- Shows pipeline status badge, last run time, and module badges (CI, CD, etc.)
-- **Works without a git repository** — uses your global org/project settings
+Your Personal Access Token is stored securely in VS Code's secret storage.
 
-This mode gives you a dashboard view of all your pipelines and their current status.
+### Optional Settings
 
-You can **pin** this view as your default using the 📌 button — the extension will always open to this view when VS Code starts.
+- `harness.pollingIntervalSeconds` — How often to check for updates (default: 10s, min: 5s, max: 120s)
+- `harness.defaultView` — Which view opens by default (`pipelines` or `executions`)
+- `harness.diffAwareSTO` — Limit STO annotations to files changed in current diff (default: true)
+- `harness.logLevel` — Console verbosity: `off`, `error`, `warn`, `info` (default), `debug`
 
-### Executions
+### Per-Workspace Override
 
-Browse execution history across all pipelines in your project:
-- **Filter by status**: All / Failed / Passed
-- **Filter by pipeline**: Click a pipeline name to see only its executions
-- **Paginated view**: 10-15 executions per page with Previous/Next navigation
-- **Click any execution** to view full details, logs, and stage/step breakdown
-- **Re-run button** available for completed pipelines (currently under development)
-- **Works without a git repository or workspace folder** — uses your global org/project settings
-
-This mode is useful for:
-- Reviewing failed runs across all pipelines
-- Checking execution history when you're not in a git repository
-- Re-running previous executions
-- Investigating issues across multiple pipelines
-- Working without a workspace folder open
+Use **Harness: Switch Project (This Workspace)** to override org/project for specific workspace folders.
 
 ---
 
-## What you see
-
-### Pipeline header
-
-Shows the pipeline name, overall status badge, and elapsed time. The status dot animates while running. For completed pipelines, a **↻ Re-run** button appears to trigger a new execution with the same inputs. Click the header to open the execution in Harness.
-
-### Stages and steps
-
-Stages are listed in execution order. The active or failed stage is highlighted. Steps within a stage expand automatically during a run — click any step to expand or collapse it manually.
-
-### Logs
-
-Pipeline step logs are fetched in the background for all steps. The most relevant step is auto-expanded:
-- If the pipeline failed: the first failed step
-- Otherwise: the last step that ran
-
-Click any step to view its logs inline. Logs are color-coded (errors in red, warnings in yellow).
-
-### Failure banner
-
-When a pipeline fails, a red banner appears below the stages with the error message from Harness.
-
-### Policy Evaluations
-
-A compact row shows the count of passed, warning, and errored policy evaluations. Hover over it to see a tooltip with each policy name and its deny message.
-
-Click **↗** to open the full policy evaluation page in Harness.
-
-### Module summary cards (when available)
-
-| Module | What it shows |
-|--------|--------------|
-| **CI** | Build steps, logs and status |
-| **CD** | Deployment status per environment |
-
-
-### Future Ideas
-
-| Module | What it shows |
-|--------|--------------|
-| **STO** | Security scan findings — new critical, high, medium counts |
-| **TI** | Test Intelligence — passed, failed, flaky test counts, time saved |
-| **SSCA** | Supply chain — number of flagged components in your diff |
-
-### Approval gates
-
-When a pipeline is waiting for a manual approval, a card appears inline below the approval stage showing:
-- Which user groups or individuals need to approve
-- Minimum approval count required
-- **✓ Approve** and **✕ Reject** buttons
-
-The buttons call the Harness Approval API using your PAT. If your user is not in the approver group, the API will return an error.
-
 ---
 
-## Commands
+## 📋 Commands
 
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `Harness: Configure API Key` | Set or update your PAT, Account ID, org, and project (global) |
-| `Harness: Select Org & Project` | Change your global org and project settings |
-| `Harness: Switch Project (This Workspace)` | Override org/project for the current workspace only |
-| `Harness: Refresh Pipeline Status` | Force a fresh poll immediately |
-| `Harness: Clear API Key` | Remove stored credentials |
-| `Harness: Export Last Execution to JSON` | Export currently viewed execution data for debugging |
-| `Harness: Show Debug Output` | Show debug logs of all pipeline execution fetches |
+| **Harness: Configure API Key** | Set up your credentials and project (global) |
+| **Harness: Select Org & Project** | Change global org/project settings |
+| **Harness: Switch Project (This Workspace)** | Override for current workspace only |
+| **Harness: Refresh Pipeline Status** | Force refresh immediately |
+| **Harness: Open Execution in Browser** | Open current execution in Harness UI |
+| **Harness: Export Last Execution to JSON** | Export execution data for debugging |
+| **Harness: Show Debug Output** | View API request logs |
+| **Harness: Debug FME Flags** | View current feature flag states |
+
 
 ---
 
-## Limitations
+## 📝 Changelog
 
-- **Pipeline re-run button** — UI is implemented but currently non-functional due to Harness API endpoint research in progress
-- **Approval permissions** — Approve/Reject buttons are permission-checked against user groups; if you're not an approver, buttons are disabled with an informational message
-- **Harness AIDA Root Cause Analysis** — the AI analysis card is not yet functional (endpoint under investigation)
-- **AI Integration requires Claude Code** — The AI chat feature requires Claude Code CLI or Extension to be installed separately
+See [CHANGELOG.md](CHANGELOG.md) for release notes and version history.
+
+---
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
