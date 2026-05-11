@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logger } from '../utils/logger';
 
 export const LOG_SCHEME = 'harness-log';
 
@@ -15,14 +16,14 @@ export class LogContentProvider implements vscode.TextDocumentContentProvider {
   provideTextDocumentContent(uri: vscode.Uri): string {
     // The key is stored with .log extension, uri.path includes leading /
     const key = uri.path.substring(1); // Remove leading /
-    console.log('[LogProvider] Requesting log:', { uri: uri.toString(), key, authority: uri.authority, path: uri.path });
+    logger.debug('LogProvider', 'Requesting log:', { uri: uri.toString(), key, authority: uri.authority, path: uri.path });
 
     const content = this.logs.get(key);
     if (!content) {
-      console.warn('[LogProvider] No content found for key:', key, 'Available keys:', Array.from(this.logs.keys()));
+      logger.warn('LogProvider', 'No content found for key:', key, 'Available keys:', Array.from(this.logs.keys()));
       return '# No logs available\n\nThis step has no log output.';
     }
-    console.log('[LogProvider] ✓ Returning content:', content.length, 'chars');
+    logger.debug('LogProvider', '✓ Returning content:', content.length, 'chars');
     return content;
   }
 
