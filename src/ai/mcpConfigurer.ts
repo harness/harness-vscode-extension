@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { getMCPConfigPath } from './detector';
+import { logger } from '../utils/logger';
 
 interface MCPServerConfig {
   type: string;
@@ -57,7 +58,7 @@ export async function configureMCP(options: ConfigureOptions): Promise<void> {
       // Move to timestamped backup
       fs.copyFileSync(configPath, backupPathWithTime);
 
-      console.warn(`[MCP] Backed up invalid config to ${backupPathWithTime}`);
+      logger.warn('MCP', `Backed up invalid config to ${backupPathWithTime}`);
 
       // Start fresh
       config = {};
@@ -115,7 +116,7 @@ export async function configureMCP(options: ConfigureOptions): Promise<void> {
         env: { ...existingProjectEnv, ...harnessConfig.env },
       };
     }
-    console.log(`[MCP] Configured Harness MCP for ${projectKeys.length} project(s)`);
+    logger.debug('MCP', `Configured Harness MCP for ${projectKeys.length} project(s)`);
   }
 
   // Also add to current working directory if it's not already in projects
@@ -125,7 +126,7 @@ export async function configureMCP(options: ConfigureOptions): Promise<void> {
         harness: harnessConfig,
       },
     };
-    console.log(`[MCP] Added Harness MCP to current project: ${cwd}`);
+    logger.debug('MCP', `Added Harness MCP to current project: ${cwd}`);
   }
 
   // Write config with pretty formatting (preserves other top-level fields)
@@ -133,14 +134,14 @@ export async function configureMCP(options: ConfigureOptions): Promise<void> {
   fs.writeFileSync(configPath, configJson, 'utf-8');
 
   if (existingGlobalHarness) {
-    console.log(`[MCP] Updated Harness MCP server configuration at ${configPath}`);
+    logger.info('MCP', `Updated Harness MCP server configuration at ${configPath}`);
   } else {
-    console.log(`[MCP] Created Harness MCP server configuration at ${configPath}`);
+    logger.info('MCP', `Created Harness MCP server configuration at ${configPath}`);
   }
-  console.log('[MCP] IMPORTANT: Restart Claude Code to activate MCP server');
+  logger.info('MCP', 'IMPORTANT: Restart Claude Code to activate MCP server');
 
   // Log the config for debugging
-  console.log('[MCP] Global configuration:', JSON.stringify(config.mcpServers?.harness, null, 2));
+  logger.debug('MCP', 'Global configuration:', JSON.stringify(config.mcpServers?.harness, null, 2));
 }
 
 /**
@@ -193,10 +194,10 @@ export async function removeMCPConfig(): Promise<void> {
       const configJson = JSON.stringify(config, null, 2);
       fs.writeFileSync(configPath, configJson, 'utf-8');
 
-      console.log('[MCP] Removed Harness MCP server from config');
+      logger.info('MCP', 'Removed Harness MCP server from config');
     }
   } catch (error) {
-    console.error('[MCP] Failed to remove config:', error);
+    logger.error('MCP', 'Failed to remove config:', error);
     throw error;
   }
 }
