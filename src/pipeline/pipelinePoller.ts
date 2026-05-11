@@ -7,6 +7,7 @@ import { getGitContext, getGitApi, executionMatchesSha } from '../git/gitContext
 import { handleApiError } from '../utils/errorHandler';
 import { dispatchModules } from './executionDispatcher';
 import { ExecutionSummary, ExecutionDetail, ExecutionGraph } from '../api/types';
+import { logger } from '../utils/logger';
 
 const INTERVAL_ACTIVE_MS    = 1_000;   // while pipeline is running or waiting for execution
 const INTERVAL_HEARTBEAT_MS = 120_000; // idle safety net
@@ -123,13 +124,13 @@ export class PipelinePoller implements vscode.Disposable {
 
     if (isActive && !wasActive) {
       // Becoming active - do immediate refresh to show fresh data
-      console.log('[PipelinePoller] Sidebar visible and window focused - resuming polling');
+      logger.debug('Poller', 'Sidebar visible and window focused - resuming polling');
       this.lastStatus = null; // Force refresh
       this.stopTimer();
       this.tick();
     } else if (!isActive && wasActive) {
       // Becoming inactive - stop polling to save resources
-      console.log('[PipelinePoller] Sidebar hidden or window unfocused - pausing polling');
+      logger.debug('Poller', 'Sidebar hidden or window unfocused - pausing polling');
       this.stopTimer();
     }
   }
@@ -144,13 +145,13 @@ export class PipelinePoller implements vscode.Disposable {
 
     if (isActive && !wasActive) {
       // Becoming active - do immediate refresh to show fresh data
-      console.log('[PipelinePoller] Window focused and sidebar visible - resuming polling');
+      logger.debug('Poller', 'Window focused and sidebar visible - resuming polling');
       this.lastStatus = null; // Force refresh
       this.stopTimer();
       this.tick();
     } else if (!isActive && wasActive) {
       // Becoming inactive - stop polling to save resources
-      console.log('[PipelinePoller] Window unfocused - pausing polling');
+      logger.debug('Poller', 'Window unfocused - pausing polling');
       this.stopTimer();
     }
   }
@@ -213,17 +214,17 @@ export class PipelinePoller implements vscode.Disposable {
   private async tick(): Promise<void> {
     // Prevent concurrent executions - if tick is already running, skip this call
     if (this.isTickRunning) {
-      console.log('[PipelinePoller] Skipping tick - already running');
+      logger.debug('Poller', 'Skipping tick - already running');
       return;
     }
 
     // Skip API calls if sidebar is not visible or window is unfocused
     if (!this.isActive()) {
-      console.log('[PipelinePoller] Skipping tick - sidebar hidden or window unfocused');
+      logger.debug('Poller', 'Skipping tick - sidebar hidden or window unfocused');
       return;
     }
 
-    console.log('[PipelinePoller] ▶ Tick starting');
+    logger.debug('Poller', '▶ Tick starting');
     this.isTickRunning = true;
     try {
       const ctx = await getGitContext();
@@ -310,11 +311,11 @@ export class PipelinePoller implements vscode.Disposable {
       }
 
       if (!ctx) {
-        console.log('[PipelinePoller] No git context, sending NO_EXECUTION');
+        logger.debug('Poller', 'No git context, sending NO_EXECUTION');
         this.webview.send({ type: 'NO_EXECUTION', ctx: null });
 
         // Schedule next poll based on whether detail execution is running
-        console.log('[PipelinePoller] No git context - scheduling based on anyRunning:', anyRunning);
+        logger.debug('Poller', 'No git context - scheduling based on anyRunning:', anyRunning);
         if (anyRunning) {
           this.scheduleActive();
         } else {
@@ -398,7 +399,7 @@ export class PipelinePoller implements vscode.Disposable {
         execDetail.status   = currentStatus;
         const isTerminal    = TERMINAL_STATUSES.has(currentStatus);
 
-        console.log('[PipelinePoller] Status normalization:', {
+        logger.debug('Poller', 'Status normalization:', {
           rawStatus: (detail.data?.pipelineExecutionSummary?.status as any),
           normalizedStatus: currentStatus,
           isTerminal,
@@ -447,7 +448,7 @@ export class PipelinePoller implements vscode.Disposable {
           }
         }
 
-        console.log('[PipelinePoller] Execution status check:', {
+        logger.debug('Poller', 'Execution status check:', {
           planExecutionId: match.planExecutionId,
           status: currentStatus,
           isTerminal,
@@ -457,7 +458,7 @@ export class PipelinePoller implements vscode.Disposable {
         }
       }
 
-      console.log('[PipelinePoller] Scheduling decision:', {
+      logger.debug('Poller', 'Scheduling decision:', {
         anyRunning,
         hasDetailExec: !!this.detailExecutionId,
         action: anyRunning ? 'scheduleActive (1s)' : 'scheduleHeartbeat (120s)'
@@ -475,7 +476,7 @@ export class PipelinePoller implements vscode.Disposable {
       handleApiError(error, 'PipelinePoller.tick');
       this.scheduleHeartbeat();
     } finally {
-      console.log('[PipelinePoller] ◼ Tick complete, releasing lock');
+      logger.debug('Poller', '◼ Tick complete, releasing lock');
       this.isTickRunning = false;
     }
   }
