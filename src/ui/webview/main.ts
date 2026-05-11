@@ -858,10 +858,12 @@ window.addEventListener('message', ({ data: msg }) => {
     case 'STEP_LOGS_LOADING':
       state.loadingSteps.add(msg.nodeId as string);
       // Don't auto-expand - let user's click action control expansion
+      render(); // Re-render to show loading spinner
       break;
 
     case 'STEP_LOGS_EMPTY':
       state.loadingSteps.delete(msg.nodeId as string);
+      render(); // Re-render to show "No logs available" message
       break;
 
     case 'STEP_LOGS_OPENED_IN_TAB':
@@ -871,6 +873,7 @@ window.addEventListener('message', ({ data: msg }) => {
         state.stepsOpenedInTab = new Set();
       }
       state.stepsOpenedInTab.add(msg.nodeId as string);
+      render(); // Re-render to show "✓ Logs opened in editor tab" message
       break;
 
     case 'STEP_LOGS_ERROR':

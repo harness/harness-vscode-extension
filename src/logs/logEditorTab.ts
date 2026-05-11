@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { LogContentProvider } from './logContentProvider';
 import { logger } from '../utils/logger';
+import { stripAnsiFromLines } from '../utils/ansiStrip';
 
 export const LOG_SCHEME = 'harness-log';
 
@@ -61,17 +62,20 @@ function formatContent(info: StepLogInfo): string {
     info.status === 'RUNNING' ? '▶' :
     info.status === 'IGNOREFAILED' ? '⚠' : '–';
 
+  // Strip ANSI color codes from log lines
+  const cleanLines = stripAnsiFromLines(info.logLines);
+
   const header = [
     `# ${statusIcon}  ${info.pipelineName}  ›  ${info.stageName}  ›  ${info.stepName}`,
     `#    execution: ${info.planExecutionId}`,
     info.durationMs ? `#    duration:  ${(info.durationMs / 1000).toFixed(1)}s` : '',
     `#    status:    ${info.status}`,
-    `#    lines:     ${info.logLines.length}`,
+    `#    lines:     ${cleanLines.length}`,
     `# ${'─'.repeat(74)}`,
     '',
   ].filter(Boolean).join('\n');
 
-  const parsedLines = info.logLines.map((line, idx) => parseLogLine(line, idx + 1));
+  const parsedLines = cleanLines.map((line, idx) => parseLogLine(line, idx + 1));
 
   const body = parsedLines
     .map(l => {
