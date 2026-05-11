@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { LogContentProvider } from './logContentProvider';
+import { logger } from '../utils/logger';
 
 export const LOG_SCHEME = 'harness-log';
 
@@ -94,20 +95,20 @@ export async function openLogAsEditorTab(
   info: StepLogInfo,
   provider: LogContentProvider
 ): Promise<void> {
-  console.log('[LogEditorTab] Opening log for:', {
+  logger.debug('LogEditorTab', 'Opening log for:', {
     stepName: info.stepName,
     stageName: info.stageName,
     logLinesCount: info.logLines.length,
   });
 
   if (!info.logLines || info.logLines.length === 0) {
-    console.warn('[LogEditorTab] No log lines provided!');
+    logger.warn('LogEditorTab', 'No log lines provided!');
   }
 
   const key = stepKey(info);
   const content = formatContent(info);
 
-  console.log('[LogEditorTab] Generated content:', {
+  logger.debug('LogEditorTab', 'Generated content:', {
     key,
     contentLength: content.length,
     contentPreview: content.substring(0, 200),
@@ -122,7 +123,7 @@ export async function openLogAsEditorTab(
     scheme: LOG_SCHEME,
     path: `/${keyWithExt}`,
   });
-  console.log('[LogEditorTab] Opening URI:', uri.toString(), '→ path:', uri.path);
+  logger.debug('LogEditorTab', 'Opening URI:', uri.toString(), '→ path:', uri.path);
 
   const doc = await vscode.workspace.openTextDocument(uri);
 

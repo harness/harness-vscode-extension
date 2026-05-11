@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { GitContext } from '../git/gitContext';
 import { ExecutionDetail, ExecutionSummary, ExecutionGraph, AidaRca, PolicyEvaluation, BuildCost } from '../api/types';
 import { PipelineListItem } from '../api/pipelineService';
+import { logger } from '../utils/logger';
 
 export type WebviewMessage =
   | { type: 'GIT_CONTEXT';      ctx: GitContext | null; org?: string; project?: string; defaultView?: string; logViewerVariation?: string; webviewTheme?: 'simple' | 'enhanced'; ideThemeKind?: number; aiChatEnabled?: boolean }
@@ -58,16 +59,16 @@ export class WebviewBridge {
     this.handlerDisposable = view.webview.onDidReceiveMessage((msg: unknown) => {
       const m = msg as { type?: string };
 
-      console.log('[WebviewBridge] Received message from webview:', m?.type);
+      logger.debug('WebviewBridge', 'Received message from webview:', m?.type);
 
       if (!this.webviewReady && m?.type === 'WEBVIEW_READY') {
-        console.log('[WebviewBridge] WEBVIEW_READY received, setting webviewReady = true');
+        logger.debug('WebviewBridge', 'WEBVIEW_READY received, setting webviewReady = true');
         this.webviewReady = true;
         this.flushQueue(view);
         return; // don't forward WEBVIEW_READY to extension handler
       }
 
-      console.log('[WebviewBridge] Forwarding message to extension handler, webviewReady:', this.webviewReady, 'hasHandler:', !!this.messageHandler);
+      logger.debug('WebviewBridge', 'Forwarding message to extension handler, webviewReady:', this.webviewReady, 'hasHandler:', !!this.messageHandler);
       this.messageHandler?.(msg);
     });
   }
@@ -84,7 +85,7 @@ export class WebviewBridge {
       return true;
     }).reverse();
 
-    console.log('[WebviewBridge] Flushing queue', { queueSize: this.queue.length, toSendSize: toSend.length, types: toSend.map(m => m.type) });
+    logger.debug('WebviewBridge', 'Flushing queue', { queueSize: this.queue.length, toSendSize: toSend.length, types: toSend.map(m => m.type) });
 
     this.queue = [];
     for (const msg of toSend) {
@@ -99,7 +100,7 @@ export class WebviewBridge {
     if (this.view && this.webviewReady) {
       this.view.webview.postMessage(message);
       if (message.type === 'HISTORY_LIST') {
-        console.log('[WebviewBridge] Sent HISTORY_LIST directly', { count: (message as any).executions?.length });
+        logger.debug('WebviewBridge', 'Sent HISTORY_LIST directly', { count: (message as any).executions?.length });
       }
       return;
     }
@@ -111,12 +112,12 @@ export class WebviewBridge {
     }
     this.queue.push(message);
     if (message.type === 'HISTORY_LIST') {
-      console.log('[WebviewBridge] Queued HISTORY_LIST (webviewReady:', this.webviewReady, 'hasView:', !!this.view, ')');
+      logger.debug('WebviewBridge', 'Queued HISTORY_LIST (webviewReady:', this.webviewReady, 'hasView:', !!this.view, ')');
     }
   }
 
   onMessage(handler: (msg: unknown) => void): void {
-    console.log('[WebviewBridge] onMessage handler registered');
+    logger.debug('WebviewBridge', 'onMessage handler registered');
     this.messageHandler = handler;
     // The combined handler in setView calls this.messageHandler dynamically,
     // so no re-registration needed even if onMessage is called after setView.

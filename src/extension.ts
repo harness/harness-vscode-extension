@@ -31,7 +31,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const diagnostics    = new DiagnosticsManager();
   const bridge         = new WebviewBridge();
   const statusBar      = new StatusBarItem();
-  const outputChannel  = vscode.window.createOutputChannel('Harness Debug');
+  const outputChannel  = vscode.window.createOutputChannel('Harness');
+
+  // Initialize logger with OutputChannel
+  logger.initialize(outputChannel);
 
   context.subscriptions.push(diagnostics, statusBar, outputChannel);
 
@@ -198,14 +201,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.showErrorMessage(`Harness: Failed to re-run pipeline — ${msg}`);
       }
     } else if (m.type === 'fetchHistory') {
-      console.log('[Harness] fetchHistory message received', { page: m.page, filter: m.filter, pageSize: m.pageSize, pipelineId: m.pipelineId, hasConfig: !!currentConfig });
+      logger.debug('Extension', 'fetchHistory message received', { page: m.page, filter: m.filter, pageSize: m.pageSize, pipelineId: m.pipelineId, hasConfig: !!currentConfig });
       if (!currentConfig) {
         // Silent return - empty state in webview will handle unconfigured state
         return;
       }
       await fetchExecutionHistory(currentConfig, bridge, m.page ?? 0, m.filter ?? 'all', m.pageSize ?? 15, m.pipelineId);
     } else if (m.type === 'fetchExecutionDetail') {
-      console.log('[Harness] fetchExecutionDetail message received', { planExecutionId: m.planExecutionId, hasConfig: !!currentConfig });
+      logger.debug('Extension', 'fetchExecutionDetail message received', { planExecutionId: m.planExecutionId, hasConfig: !!currentConfig });
       if (!currentConfig || !m.planExecutionId) {
         vscode.window.showErrorMessage('Harness: Cannot fetch execution detail');
         return;
@@ -237,7 +240,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
     } else if (m.type === 'clearExecution') {
       // Clear tracked execution when user navigates away from execution detail
-      console.log('[Harness] Clearing tracked execution (user navigated away)');
+      logger.debug('Extension', 'Clearing tracked execution (user navigated away)');
       currentViewedExecution = null;
       // Stop polling the detail execution
       if (poller) {
@@ -250,7 +253,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         msg.key
       );
     } else if (m.type === 'fetchPipelines') {
-      console.log('[Harness] fetchPipelines message received', { hasConfig: !!currentConfig });
+      logger.debug('Extension', 'fetchPipelines message received', { hasConfig: !!currentConfig });
       if (!currentConfig) {
         // Silent return - empty state in webview will handle unconfigured state
         return;
@@ -264,11 +267,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const key = `${currentConfig.orgIdentifier}.${currentConfig.projectIdentifier}.pinnedPipelines`;
         const pinnedPipelines = context.globalState.get<string[]>(key, []);
 
-        console.log('[Harness] Fetched pipelines:', { count: pipelines.length, pinnedCount: pinnedPipelines.length });
+        logger.debug('Extension', 'Fetched pipelines:', { count: pipelines.length, pinnedCount: pinnedPipelines.length });
         bridge.send({ type: 'PIPELINE_LIST', pipelines, pinnedPipelines });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error('[Harness] Failed to fetch pipelines:', msg);
+        logger.error('Extension', 'Failed to fetch pipelines:', msg);
         vscode.window.showErrorMessage(`Harness: Failed to fetch pipelines — ${msg}`);
         bridge.send({ type: 'PIPELINE_LIST', pipelines: [] });
       }
@@ -276,7 +279,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const pipelines = m.pinnedPipelines ?? [];
       const key = `${currentConfig?.orgIdentifier}.${currentConfig?.projectIdentifier}.pinnedPipelines`;
       await context.globalState.update(key, pipelines);
-      console.log('[Harness] Saved pinned pipelines:', { count: pipelines.length, key });
+      logger.debug('Extension', 'Saved pinned pipelines:', { count: pipelines.length, key });
     } else if (m.type === 'AI_SEND_MESSAGE') {
       // Handle AI question from webview
       logger.debug('Extension', 'AI_SEND_MESSAGE received!', msg);
@@ -388,7 +391,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const detection = await detectAITools(getAIToolPreference());
       const tool = detection.tools.find(t => t.id === detection.activeTool);
       if (tool && tool.id === 'cursor') {
-        console.log('[AI] Skipping MCP configuration for Cursor (uses plugin)');
+        logger.debug('AI', 'Skipping MCP configuration for Cursor (uses plugin)');
         return;
       }
 
@@ -422,7 +425,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const detection = await detectAITools(getAIToolPreference());
         const activeTool = detection.activeTool || 'claudecode-cli';
 
-        console.log('[AI] MCP configured successfully');
+        logger.info('AI', 'MCP configured successfully');
         bridge.send({
           type: 'AI_CONFIG_DONE',
           tool: activeTool,
@@ -438,7 +441,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }, 500);
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        console.error('[AI] MCP configuration failed:', msg);
+        logger.error('AI', 'MCP configuration failed:', msg);
         bridge.send({
           type: 'AI_ERROR',
           message: `Failed to configure MCP: ${msg}`,
@@ -449,7 +452,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const aiMsg = m as any;
       if (!aiMsg.toolId) return;
 
-      console.log('[AI] Switching to tool:', aiMsg.toolId);
+      logger.debug('AI', 'Switching to tool:', aiMsg.toolId);
 
       // Save preference
       await setAIToolPreference(aiMsg.toolId);
@@ -458,17 +461,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const detection = await detectAITools(aiMsg.toolId);
 
       if (detection.activeTool === aiMsg.toolId) {
-        console.log('[AI] Tool preference saved:', aiMsg.toolId);
+        logger.debug('AI', 'Tool preference saved:', aiMsg.toolId);
         bridge.send({
           type: 'STATE_UPDATE',
           aiDetection: detection,
         });
       } else {
-        console.warn('[AI] Selected tool not available:', aiMsg.toolId);
+        logger.warn('AI', 'Selected tool not available:', aiMsg.toolId);
       }
     } else if (m.type === 'AI_CURSOR_INSTALL_PLUGIN') {
       // Open Cursor Marketplace for plugin installation
-      console.log('[AI] Opening Cursor Marketplace for Harness Plugin');
+      logger.debug('AI', 'Opening Cursor Marketplace for Harness Plugin');
       await vscode.env.openExternal(
         vscode.Uri.parse('https://cursor.com/marketplace/harness')
       );
@@ -517,7 +520,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Listen for VS Code theme changes and notify webview
   context.subscriptions.push(
     vscode.window.onDidChangeActiveColorTheme(async (theme) => {
-      console.log('[Harness] IDE theme changed:', {
+      logger.debug('Extension', 'IDE theme changed:', {
         kind: theme.kind,
         kindName: theme.kind === 1 ? 'Light' : theme.kind === 2 ? 'Dark' : theme.kind === 3 ? 'HighContrast' : 'HighContrastLight'
       });
@@ -533,7 +536,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const { getLogViewerVariation, getAiChatEnabled } = await import('./fme/fmeClient');
         const logViewerVariation = await getLogViewerVariation();
         const aiChatEnabled = getAiChatEnabled();
-        console.log('[Harness] Sending theme update to webview:', { webviewTheme, ideThemeKind });
+        logger.debug('Extension', 'Sending theme update to webview:', { webviewTheme, ideThemeKind });
         bridge.send({
           type: 'GIT_CONTEXT',
           ctx,
@@ -556,7 +559,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const origSend = bridge.send.bind(bridge);
   bridge.send = (message) => {
     // Debug: Log all messages to see what's being sent
-    console.log('[Bridge] Sending message:', message.type);
+    logger.debug('Bridge', 'Sending message:', message.type);
 
     origSend(message);
     if (message.type === 'EXECUTION_UPDATE') {
@@ -568,7 +571,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         executionGraph: message.executionGraph,
         source: 'live',
       };
-      console.log('[Harness] Tracked EXECUTION_UPDATE:', {
+      logger.debug('Extension', 'Tracked EXECUTION_UPDATE:', {
         name: ex.name,
         planExecutionId: ex.planExecutionId,
         hasGraph: !!message.executionGraph,
@@ -580,7 +583,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         executionGraph: message.executionGraph,
         source: 'history',
       };
-      console.log('[Harness] Tracked HISTORY_DETAIL:', {
+      logger.debug('Extension', 'Tracked HISTORY_DETAIL:', {
         name: message.execution.name,
         planExecutionId: message.execution.planExecutionId,
         hasGraph: !!message.executionGraph,
@@ -589,12 +592,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       statusBar.setIdle();
       // Only clear tracked execution if it's from live mode
       // History detail executions should persist even when live poller sends NO_EXECUTION
-      console.log('[Harness] NO_EXECUTION received, currentViewedExecution:', currentViewedExecution?.source || 'null');
+      logger.debug('Extension', 'NO_EXECUTION received, currentViewedExecution:', currentViewedExecution?.source || 'null');
       if (currentViewedExecution?.source === 'live') {
         currentViewedExecution = null;
-        console.log('[Harness] Cleared live execution (NO_EXECUTION)');
+        logger.debug('Extension', 'Cleared live execution (NO_EXECUTION)');
       } else {
-        console.log('[Harness] Keeping execution (not from live mode)');
+        logger.debug('Extension', 'Keeping execution (not from live mode)');
       }
     } else if (message.type === 'AUTH_ERROR') {
       statusBar.setNotConfigured();
@@ -726,8 +729,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand('harness.exportLastExecution', async () => {
       // Export the currently viewed execution (from live mode or history detail)
-      console.log('[Harness] Export command triggered.');
-      console.log('[Harness] Current execution:', currentViewedExecution ? {
+      logger.debug('Extension', 'Export command triggered.');
+      logger.debug('Extension', 'Current execution:', currentViewedExecution ? {
         hasExecution: !!currentViewedExecution.execution,
         hasGraph: !!currentViewedExecution.executionGraph,
         planExecutionId: currentViewedExecution.execution?.planExecutionId,
@@ -736,7 +739,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const executionData = currentViewedExecution;
       if (!executionData) {
-        console.log('[Harness] No execution data available for export');
+        logger.debug('Extension', 'No execution data available for export');
         vscode.window.showWarningMessage('Harness: No execution is currently being viewed. Open a pipeline execution first.');
         return;
       }
@@ -763,7 +766,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('harness.debugFmeFlags', async () => {
       const { refreshFmeClient } = await import('./fme/fmeClient');
       refreshFmeClient();
-      vscode.window.showInformationMessage('FME: Flag states logged to console (see Developer Tools)');
+      vscode.window.showInformationMessage('FME: Flag states logged to Output panel (View → Output → Harness). Set logLevel=debug for details.');
     }),
   );
 
@@ -801,13 +804,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Detect Claude Code CLI/Extension and check MCP readiness
   // Runs in background, won't block extension activation
   detectAITools(getAIToolPreference()).then(detection => {
-    console.log('[AI] Detection complete:', { tools: detection.tools.map(t => `${t.id} (MCP: ${t.mcpReady})`).join(', '), activeTool: detection.activeTool });
+    logger.debug('AI', 'Detection complete:', { tools: detection.tools.map(t => `${t.id} (MCP: ${t.mcpReady})`).join(', '), activeTool: detection.activeTool });
     bridge.send({
       type: 'STATE_UPDATE',
       aiDetection: detection,
     });
   }).catch(err => {
-    console.error('[AI] Detection failed:', err);
+    logger.error('AI', 'Detection failed:', err);
     // Send empty detection result on error
     bridge.send({
       type: 'STATE_UPDATE',
@@ -826,7 +829,7 @@ async function fetchExecutionHistory(
   pageSize: number,
   pipelineId?: string
 ): Promise<void> {
-  console.log('[Harness] fetchExecutionHistory called', { page, filter, pageSize, pipelineId, org: config.orgIdentifier, project: config.projectIdentifier });
+  logger.debug('Extension', 'fetchExecutionHistory called', { page, filter, pageSize, pipelineId, org: config.orgIdentifier, project: config.projectIdentifier });
   try {
     const client = new HarnessClient(config);
 
@@ -836,7 +839,7 @@ async function fetchExecutionHistory(
       timeRange: { timeRangeFilterType: 'LAST_7_DAYS' },
     };
 
-    console.log('[Harness] fetchExecutionHistory request', { page, filter });
+    logger.debug('Extension', 'fetchExecutionHistory request', { page, filter });
 
     // Fetch a larger page size to have enough data for client-side filtering
     const response = await client.post<{
@@ -870,7 +873,7 @@ async function fetchExecutionHistory(
 
     let executions = response.data?.content ?? [];
 
-    console.log('[Harness] Received executions from API', {
+    logger.debug('Extension', 'Received executions from API', {
       count: executions.length,
       filter,
       statuses: executions.map(e => e.status).slice(0, 5)
@@ -894,7 +897,7 @@ async function fetchExecutionHistory(
       });
     }
 
-    console.log('[Harness] After client-side status filter', {
+    logger.debug('Extension', 'After client-side status filter', {
       count: executions.length,
       filter
     });
@@ -902,7 +905,7 @@ async function fetchExecutionHistory(
     // Filter by pipeline if specified
     if (pipelineId) {
       executions = executions.filter(ex => ex.pipelineIdentifier === pipelineId);
-      console.log('[Harness] After pipeline filter', {
+      logger.debug('Extension', 'After pipeline filter', {
         count: executions.length,
         pipelineId
       });
@@ -950,7 +953,7 @@ async function fetchExecutionHistory(
       };
     });
 
-    console.log('[Harness] Sending HISTORY_LIST', { count: enhancedExecutions.length, total, page });
+    logger.debug('Extension', 'Sending HISTORY_LIST', { count: enhancedExecutions.length, total, page });
     bridge.send({
       type: 'HISTORY_LIST',
       executions: enhancedExecutions as any,
@@ -959,7 +962,7 @@ async function fetchExecutionHistory(
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error('[Harness] fetchExecutionHistory error', error);
+    logger.error('Extension', 'fetchExecutionHistory error', error);
     vscode.window.showErrorMessage(`Harness: Failed to fetch execution history — ${msg}`);
     // Send empty list to clear loading state
     bridge.send({
@@ -1066,7 +1069,7 @@ async function fetchExecutionDetail(
       }
     }
 
-    console.log('[Harness] Dispatching modules for history detail:', {
+    logger.debug('Extension', 'Dispatching modules for history detail:', {
       planExecutionId,
       status: execution.status,
       hasGraph: !!executionGraph
@@ -1094,7 +1097,7 @@ async function fetchExecutionDetail(
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error('[Harness] fetchExecutionDetail error', error);
+    logger.error('Extension', 'fetchExecutionDetail error', error);
     vscode.window.showErrorMessage(`Harness: Failed to fetch execution detail — ${msg}`);
     // Clear loading state in webview
     bridge.send({
@@ -1119,7 +1122,7 @@ async function fetchStepLogsOnDemand(
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    console.log('[Harness] Fetching logs on-demand', { logBaseKey, nodeId });
+    logger.debug('Extension', 'Fetching logs on-demand', { logBaseKey, nodeId });
 
     // Send loading state
     bridge.send({
@@ -1135,15 +1138,15 @@ async function fetchStepLogsOnDemand(
     try {
       lines = await fetchStepLogs(config as any, logBaseKey);
       attempts++;
-      console.log(`[Harness] Initial fetch: ${lines.length} lines`, { nodeId });
+      logger.debug('Extension', `Initial fetch: ${lines.length} lines`, { nodeId });
     } catch (err) {
-      console.error('[Harness] Initial fetch error:', err);
+      logger.error('Extension', 'Initial fetch error:', err);
     }
 
     // Retry with exponential backoff if no logs found (logs might not be indexed yet)
     const retryDelays = [3000, 5000, 7000, 10000]; // 3s, 5s, 7s, 10s (total 25s)
     for (let i = 0; i < retryDelays.length && lines.length === 0; i++) {
-      console.log(`[Harness] Retry ${i + 1}/${retryDelays.length} in ${retryDelays[i]}ms...`, {
+      logger.debug('Extension', `Retry ${i + 1}/${retryDelays.length} in ${retryDelays[i]}ms...`, {
         nodeId,
         logBaseKey,
         elapsed: `${((Date.now() - startTime) / 1000).toFixed(1)}s`
@@ -1155,26 +1158,26 @@ async function fetchStepLogsOnDemand(
       try {
         lines = await fetchStepLogs(config as any, logBaseKey);
         attempts++;
-        console.log(`[Harness] Retry ${i + 1} result: ${lines.length} lines`, { nodeId });
+        logger.debug('Extension', `Retry ${i + 1} result: ${lines.length} lines`, { nodeId });
         if (lines.length > 0) {
-          console.log(`[Harness] ✓ Logs found after ${attempts} attempts (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
+          logger.debug('Extension', `✓ Logs found after ${attempts} attempts (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
             nodeId,
             lineCount: lines.length
           });
         }
       } catch (err) {
-        console.error(`[Harness] Retry ${i + 1} error:`, err);
+        logger.error('Extension', `Retry ${i + 1} error:`, err);
       }
     }
 
     if (lines.length > 0) {
       // Check FME variation to decide how to display logs
       const variation = await getLogViewerVariation();
-      console.log(`[Harness] Log viewer variation: ${variation}`, { nodeId });
+      logger.debug('Extension', `Log viewer variation: ${variation}`, { nodeId });
 
       if (variation === 'expanded' && stepName && stageName) {
         // Open logs in editor tab
-        console.log(`[Harness] Opening logs in editor tab`, {
+        logger.debug('Extension', 'Opening logs in editor tab', {
           stepName,
           stageName,
           pipelineName,
@@ -1202,17 +1205,17 @@ async function fetchStepLogsOnDemand(
         });
       } else {
         // Inline mode (control) - send logs to webview
-        console.log(`[Harness] ✓ Sending ${lines.length} log lines to webview`, { nodeId });
+        logger.debug('Extension', `✓ Sending ${lines.length} log lines to webview`, { nodeId });
         bridge.send({
           type: 'LOG_CHUNK',
           nodeId,
           lines,
           autoExpand: false, // Don't auto-expand in detail view - let user click to expand
         });
-        console.log(`[Harness] ✓ LOG_CHUNK message sent`, { nodeId });
+        logger.debug('Extension', '✓ LOG_CHUNK message sent', { nodeId });
       }
     } else {
-      console.log(`[Harness] ✗ No logs found after ${attempts} attempts (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
+      logger.debug('Extension', `✗ No logs found after ${attempts} attempts (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
         nodeId,
         logBaseKey
       });
@@ -1223,7 +1226,7 @@ async function fetchStepLogsOnDemand(
     }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error('[Harness] Fatal error fetching step logs:', { error: msg, nodeId, logBaseKey });
+    logger.error('Extension', 'Fatal error fetching step logs:', { error: msg, nodeId, logBaseKey });
     bridge.send({
       type: 'STEP_LOGS_ERROR',
       nodeId,

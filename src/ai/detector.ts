@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
+import { logger } from '../utils/logger';
 
 export interface DetectedTool {
   id: 'claudecode-cli' | 'claudecode-ext' | 'cursor';
@@ -246,7 +247,7 @@ function isCursorPluginOAuthReady(cursorDir: string): boolean {
               const hasHarnessTools = toolFiles.some(f => f.startsWith('harness_') && f.endsWith('.json'));
 
               if (hasHarnessTools) {
-                console.log('[Cursor OAuth Detection] ✅ Authenticated plugin found at:', fullPath);
+                logger.debug('Cursor OAuth Detection', '✅ Authenticated plugin found at:', fullPath);
                 return true;
               }
             }

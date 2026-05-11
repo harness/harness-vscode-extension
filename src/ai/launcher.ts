@@ -3,6 +3,7 @@
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 import * as os from 'os';
+import { logger } from '../utils/logger';
 import type { HarnessConfig } from '../config/configManager';
 
 export interface LaunchResult {
@@ -148,28 +149,28 @@ async function launchCLI(prompt: string, timeout: number, cwd?: string): Promise
  */
 async function launchExtension(prompt: string): Promise<LaunchResult> {
   try {
-    console.log('[AI Launcher] Starting Extension integration');
-    console.log('[AI Launcher] Prompt length:', prompt.length);
+    logger.debug('AI Launcher', 'Starting Extension integration');
+    logger.debug('AI Launcher', 'Prompt length:', prompt.length);
 
     // Try to execute Claude Code extension command
     const extension = vscode.extensions.getExtension('anthropic.claude-code');
     if (!extension) {
-      console.log('[AI Launcher] ✗ Extension not found');
+      logger.debug('AI Launcher', '✗ Extension not found');
       return {
         type: 'error',
         error: 'Claude Code extension not found',
       };
     }
 
-    console.log('[AI Launcher] ✓ Extension found');
-    console.log('[AI Launcher]   Extension ID:', extension.id);
-    console.log('[AI Launcher]   Is Active:', extension.isActive);
+    logger.debug('AI Launcher', '✓ Extension found');
+    logger.debug('AI Launcher', '  Extension ID:', extension.id);
+    logger.debug('AI Launcher', '  Is Active:', extension.isActive);
 
     // Activate extension if not already active
     if (!extension.isActive) {
-      console.log('[AI Launcher] ⏳ Activating extension...');
+      logger.debug('AI Launcher', '⏳ Activating extension...');
       await extension.activate();
-      console.log('[AI Launcher] ✓ Extension activated');
+      logger.debug('AI Launcher', '✓ Extension activated');
     }
 
     // List all available Claude Code commands first
@@ -177,10 +178,10 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
     const claudeCommands = allCommands.filter(cmd =>
       cmd.toLowerCase().includes('claude') || cmd.toLowerCase().includes('anthropic')
     );
-    console.log('[AI Launcher] Available Claude/Anthropic commands:', claudeCommands);
+    logger.debug('AI Launcher', 'Available Claude/Anthropic commands:', claudeCommands);
 
     // Open Claude Code chat interface
-    console.log('[AI Launcher] ⏳ Opening Claude Code chat...');
+    logger.debug('AI Launcher', '⏳ Opening Claude Code chat...');
 
     // Try these commands in order of preference
     const openCommands = [
@@ -194,24 +195,24 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
     let opened = false;
     for (const cmd of openCommands) {
       if (claudeCommands.includes(cmd)) {
-        console.log(`[AI Launcher] ⏳ Trying: ${cmd}`);
+        logger.debug('AI Launcher', `⏳ Trying: ${cmd}`);
         try {
           await vscode.commands.executeCommand(cmd);
-          console.log(`[AI Launcher] ✓ Opened with: ${cmd}`);
+          logger.debug('AI Launcher', `✓ Opened with: ${cmd}`);
           // Give it time to fully render
           await new Promise(resolve => setTimeout(resolve, 600));
           opened = true;
           break;
         } catch (cmdErr) {
-          console.log(`[AI Launcher] ⚠ ${cmd} failed:`, cmdErr);
+          logger.debug('AI Launcher', `⚠ ${cmd} failed:`, cmdErr);
         }
       } else {
-        console.log(`[AI Launcher] ⊘ ${cmd} not available`);
+        logger.debug('AI Launcher', `⊘ ${cmd} not available`);
       }
     }
 
     if (!opened) {
-      console.log('[AI Launcher] ✗ Could not open Claude Code with any command');
+      logger.debug('AI Launcher', '✗ Could not open Claude Code with any command');
       vscode.window.showWarningMessage('Could not open Claude Code. Please open it manually and try again.');
       return {
         type: 'error',
@@ -221,32 +222,32 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
 
     // Try starting a new conversation (opens with empty input ready)
     if (claudeCommands.includes('claude-vscode.newConversation')) {
-      console.log('[AI Launcher] ⏳ Starting new conversation...');
+      logger.debug('AI Launcher', '⏳ Starting new conversation...');
       try {
         await vscode.commands.executeCommand('claude-vscode.newConversation');
-        console.log('[AI Launcher] ✓ New conversation started');
+        logger.debug('AI Launcher', '✓ New conversation started');
         // Give the input time to focus and render
         await new Promise(resolve => setTimeout(resolve, 300));
       } catch (err) {
-        console.log('[AI Launcher] ⚠ New conversation failed:', err);
+        logger.debug('AI Launcher', '⚠ New conversation failed:', err);
       }
     } else {
-      console.log('[AI Launcher] ⚠ newConversation command not available');
+      logger.debug('AI Launcher', '⚠ newConversation command not available');
     }
 
     // Copy prompt to clipboard
-    console.log('[AI Launcher] ⏳ Copying prompt to clipboard...');
+    logger.debug('AI Launcher', '⏳ Copying prompt to clipboard...');
     await vscode.env.clipboard.writeText(prompt);
-    console.log('[AI Launcher] ✓ Prompt copied');
+    logger.debug('AI Launcher', '✓ Prompt copied');
 
     // Give UI time to render and focus
     await new Promise(resolve => setTimeout(resolve, 800));
 
     // Auto-paste without user interaction
-    console.log('[AI Launcher] Auto-pasting prompt...');
+    logger.debug('AI Launcher', 'Auto-pasting prompt...');
     try {
       await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
-      console.log('[AI Launcher] ✓ Auto-paste successful');
+      logger.debug('AI Launcher', '✓ Auto-paste successful');
 
       // Show brief success notification
       vscode.window.showInformationMessage(
@@ -254,7 +255,7 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
         { modal: false }
       );
     } catch (err) {
-      console.log('[AI Launcher] ⚠ Auto-paste failed, showing fallback notification');
+      logger.debug('AI Launcher', '⚠ Auto-paste failed, showing fallback notification');
       // Fallback: show notification if auto-paste fails
       vscode.window.showInformationMessage(
         'Prompt copied to clipboard - paste it in Claude Code (Cmd+V)',
@@ -262,13 +263,13 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
       );
     }
 
-    console.log('[AI Launcher] ✓ Extension launch complete');
+    logger.debug('AI Launcher', '✓ Extension launch complete');
     return {
       type: 'launched',
       content: 'Prompt auto-pasted to Claude Code.',
     };
   } catch (error) {
-    console.error('[AI Launcher] ✗ Extension launch failed:', error);
+    logger.error('AI Launcher', '✗ Extension launch failed:', error);
     return {
       type: 'error',
       error: error instanceof Error ? error.message : 'Failed to launch extension',
@@ -330,8 +331,8 @@ function extractToolCalls(result: unknown): Array<{ name: string; args?: unknown
  */
 async function launchCursor(prompt: string): Promise<LaunchResult> {
   try {
-    console.log('[AI Launcher] Starting Cursor integration');
-    console.log('[AI Launcher] Prompt length:', prompt.length);
+    logger.debug('AI Launcher', 'Starting Cursor integration');
+    logger.debug('AI Launcher', 'Prompt length:', prompt.length);
 
     // List all available commands to find the right one
     const allCommands = await vscode.commands.getCommands(true);
@@ -341,11 +342,11 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
       cmd.toLowerCase().includes('agent') ||
       cmd.toLowerCase().includes('composer')
     );
-    console.log('[AI Launcher] Available AI commands:', aiCommands);
+    logger.debug('AI Launcher', 'Available AI commands:', aiCommands);
 
     // Copy prompt to clipboard
     await vscode.env.clipboard.writeText(prompt);
-    console.log('[AI Launcher] ✓ Prompt copied to clipboard');
+    logger.debug('AI Launcher', '✓ Prompt copied to clipboard');
 
     // Try opening Cursor Composer/Agent tab
     const commandsToTry = [
@@ -358,13 +359,13 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
     for (const cmd of commandsToTry) {
       if (aiCommands.includes(cmd)) {
         try {
-          console.log(`[AI Launcher] ⏳ Trying command: ${cmd}`);
+          logger.debug('AI Launcher', `⏳ Trying command: ${cmd}`);
           await vscode.commands.executeCommand(cmd);
-          console.log(`[AI Launcher] ✓ Opened with: ${cmd}`);
+          logger.debug('AI Launcher', `✓ Opened with: ${cmd}`);
           opened = true;
           break;
         } catch (err) {
-          console.log(`[AI Launcher] ⚠ ${cmd} failed`);
+          logger.debug('AI Launcher', `⚠ ${cmd} failed`);
         }
       }
     }
@@ -373,10 +374,10 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
     await new Promise(resolve => setTimeout(resolve, 800));
 
     // Auto-paste without user interaction
-    console.log('[AI Launcher] Auto-pasting prompt...');
+    logger.debug('AI Launcher', 'Auto-pasting prompt...');
     try {
       await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
-      console.log('[AI Launcher] ✓ Auto-paste successful');
+      logger.debug('AI Launcher', '✓ Auto-paste successful');
 
       // Show brief success notification
       vscode.window.showInformationMessage(
@@ -384,7 +385,7 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
         { modal: false }
       );
     } catch (err) {
-      console.log('[AI Launcher] ⚠ Auto-paste failed, showing fallback notification');
+      logger.debug('AI Launcher', '⚠ Auto-paste failed, showing fallback notification');
       // Fallback: show notification if auto-paste fails
       vscode.window.showInformationMessage(
         'Prompt copied to clipboard - paste it in Cursor Composer (Cmd+V)',
@@ -392,13 +393,13 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
       );
     }
 
-    console.log('[AI Launcher] ✓ Cursor launch complete');
+    logger.debug('AI Launcher', '✓ Cursor launch complete');
     return {
       type: 'launched',
       content: 'Prompt auto-pasted to Cursor Composer.',
     };
   } catch (error) {
-    console.error('[AI Launcher] ✗ Cursor launch failed:', error);
+    logger.error('AI Launcher', '✗ Cursor launch failed:', error);
     return {
       type: 'error',
       error: error instanceof Error ? error.message : 'Failed to launch Cursor',

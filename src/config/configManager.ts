@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from '../auth/secretStore';
+import { logger } from '../utils/logger';
 
 export interface HarnessConfig {
   baseUrl: string;
@@ -19,20 +20,20 @@ export class ConfigManager {
     const cfg = vscode.workspace.getConfiguration('harness');
     const apiKey = await this.secretStore.getApiKey();
     if (!apiKey) {
-      console.log('[ConfigManager] No API key found');
+      logger.debug('ConfigManager', 'No API key found');
       return null;
     }
 
     const accountIdentifier = cfg.get<string>('accountIdentifier', '').trim();
     if (!accountIdentifier) {
-      console.log('[ConfigManager] No account identifier found');
+      logger.debug('ConfigManager', 'No account identifier found');
       return null;
     }
 
     const orgIdentifier = cfg.get<string>('orgIdentifier', 'default').trim();
     const projectIdentifier = cfg.get<string>('projectIdentifier', '').trim();
 
-    console.log('[ConfigManager] Config loaded:', {
+    logger.debug('ConfigManager', 'Config loaded:', {
       accountIdentifier,
       orgIdentifier,
       projectIdentifier,
