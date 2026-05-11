@@ -20,10 +20,46 @@ const LOG_LEVEL_MAP: Record<string, LogLevel> = {
 };
 
 class Logger {
+  private outputChannel: vscode.OutputChannel | null = null;
+
+  /**
+   * Initialize logger with VS Code OutputChannel
+   * Call this during extension activation
+   */
+  initialize(outputChannel: vscode.OutputChannel): void {
+    this.outputChannel = outputChannel;
+  }
+
   private getCurrentLevel(): LogLevel {
     const config = vscode.workspace.getConfiguration('harness');
     const levelStr = config.get<string>('logLevel', 'info');
     return LOG_LEVEL_MAP[levelStr] ?? LogLevel.INFO;
+  }
+
+  private formatMessage(prefix: string, ...args: any[]): string {
+    const timestamp = new Date().toISOString().substring(11, 23); // HH:MM:SS.mmm
+    const message = args.map(arg => {
+      if (typeof arg === 'string') return arg;
+      if (arg instanceof Error) return `${arg.message}\n${arg.stack}`;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }).join(' ');
+    return `[${timestamp}] [${prefix}] ${message}`;
+  }
+
+  private log(level: string, prefix: string, ...args: any[]): void {
+    const message = this.formatMessage(prefix, ...args);
+
+    // Write to OutputChannel if available
+    if (this.outputChannel) {
+      this.outputChannel.appendLine(message);
+    } else {
+      // Fallback to console if not initialized (during early startup)
+      console.log(message);
+    }
   }
 
   /**
@@ -31,7 +67,7 @@ class Logger {
    */
   error(prefix: string, ...args: any[]): void {
     if (this.getCurrentLevel() >= LogLevel.ERROR) {
-      console.error(`[${prefix}]`, ...args);
+      this.log('ERROR', prefix, ...args);
     }
   }
 
@@ -40,7 +76,7 @@ class Logger {
    */
   warn(prefix: string, ...args: any[]): void {
     if (this.getCurrentLevel() >= LogLevel.WARN) {
-      console.warn(`[${prefix}]`, ...args);
+      this.log('WARN', prefix, ...args);
     }
   }
 
@@ -49,7 +85,7 @@ class Logger {
    */
   info(prefix: string, ...args: any[]): void {
     if (this.getCurrentLevel() >= LogLevel.INFO) {
-      console.log(`[${prefix}]`, ...args);
+      this.log('INFO', prefix, ...args);
     }
   }
 
@@ -58,7 +94,7 @@ class Logger {
    */
   debug(prefix: string, ...args: any[]): void {
     if (this.getCurrentLevel() >= LogLevel.DEBUG) {
-      console.log(`[${prefix}]`, ...args);
+      this.log('DEBUG', prefix, ...args);
     }
   }
 
@@ -66,7 +102,7 @@ class Logger {
    * Log a message at any level (bypass filtering - use sparingly)
    */
   always(prefix: string, ...args: any[]): void {
-    console.log(`[${prefix}]`, ...args);
+    this.log('ALWAYS', prefix, ...args);
   }
 }
 
