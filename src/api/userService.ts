@@ -1,4 +1,5 @@
 import { HarnessConfig } from '../config/configManager';
+import { logger } from '../utils/logger';
 
 export interface HarnessCurrentUser {
   uuid: string;
@@ -14,7 +15,7 @@ export async function getCurrentUser(config: HarnessConfig): Promise<HarnessCurr
   try {
     const qs = new URLSearchParams({ accountIdentifier: config.accountIdentifier });
     const url = `${config.baseUrl}/ng/api/user/currentUser?${qs}`;
-    console.log('[Harness] getCurrentUser →', url);
+    logger.debug('UserService', 'getCurrentUser →', url);
 
     // Add timeout to prevent hanging
     const controller = new AbortController();
@@ -27,27 +28,27 @@ export async function getCurrentUser(config: HarnessConfig): Promise<HarnessCurr
       });
       clearTimeout(timeoutId);
 
-      console.log('[Harness] getCurrentUser HTTP', res.status);
+      logger.debug('UserService', 'getCurrentUser HTTP', res.status);
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        console.warn('[Harness] getCurrentUser failed:', text.slice(0, 200));
+        logger.warn('UserService', 'getCurrentUser failed:', text.slice(0, 200));
         return null;
       }
       const json = await res.json();
-      console.log('[Harness] getCurrentUser payload:', JSON.stringify(json?.data));
+      logger.debug('UserService', 'getCurrentUser payload:', JSON.stringify(json?.data));
       const u = json?.data;
       if (!u?.uuid) {
-        console.warn('[Harness] getCurrentUser: no uuid in response');
+        logger.warn('UserService', 'getCurrentUser: no uuid in response');
         return null;
       }
       return { uuid: u.uuid, email: u.email ?? '', name: u.name ?? '' };
     } catch (e) {
       clearTimeout(timeoutId);
-      console.error('[Harness] getCurrentUser exception:', e);
+      logger.error('UserService', 'getCurrentUser exception:', e);
       return null;
     }
   } catch (e) {
-    console.error('[Harness] getCurrentUser exception:', e);
+    logger.error('UserService', 'getCurrentUser exception:', e);
     return null;
   }
 }
@@ -85,7 +86,7 @@ async function isUserInGroup(
     }
 
     const url = `${config.baseUrl}/ng/api/user-groups/${encodeURIComponent(groupId)}/member/${encodeURIComponent(userUuid)}?${new URLSearchParams(qs)}`;
-    console.log('[Harness] isUserInGroup →', url);
+    logger.debug('UserService', 'isUserInGroup →', url);
 
     // Add timeout to prevent hanging
     const controller = new AbortController();
@@ -98,23 +99,23 @@ async function isUserInGroup(
       });
       clearTimeout(timeoutId);
 
-      console.log('[Harness] isUserInGroup HTTP', res.status, 'for group', rawGroupId);
+      logger.debug('UserService', 'isUserInGroup HTTP', res.status, 'for group', rawGroupId);
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        console.warn('[Harness] isUserInGroup failed:', text.slice(0, 200));
+        logger.warn('UserService', 'isUserInGroup failed:', text.slice(0, 200));
         return false;
       }
       const json = await res.json();
-      console.log('[Harness] isUserInGroup payload:', JSON.stringify(json?.data));
+      logger.debug('UserService', 'isUserInGroup payload:', JSON.stringify(json?.data));
       // Response data is a boolean: true if member
       return json?.data === true;
     } catch (e) {
       clearTimeout(timeoutId);
-      console.error('[Harness] isUserInGroup exception:', e);
+      logger.error('UserService', 'isUserInGroup exception:', e);
       return false;
     }
   } catch (e) {
-    console.error('[Harness] isUserInGroup exception:', e);
+    logger.error('UserService', 'isUserInGroup exception:', e);
     return false;
   }
 }
@@ -134,20 +135,20 @@ export async function canCurrentUserApprove(
   approverUsers: Array<{ uuid?: string; email?: string }>,
   approverGroups: string[]
 ): Promise<boolean | null> {
-  console.log('[Harness] canCurrentUserApprove — approverUsers:', JSON.stringify(approverUsers), '| approverGroups:', JSON.stringify(approverGroups));
+  logger.debug('UserService', 'canCurrentUserApprove — approverUsers:', JSON.stringify(approverUsers), '| approverGroups:', JSON.stringify(approverGroups));
 
   // No restrictions configured → anyone can approve
   if (!approverUsers.length && !approverGroups.length) {
-    console.log('[Harness] canCurrentUserApprove → no restrictions, allowing');
+    logger.debug('UserService', 'canCurrentUserApprove → no restrictions, allowing');
     return true;
   }
 
   const user = await getCurrentUser(config);
   if (!user) {
-    console.warn('[Harness] canCurrentUserApprove → could not fetch current user, defaulting to null');
+    logger.warn('UserService', 'canCurrentUserApprove → could not fetch current user, defaulting to null');
     return null;
   }
-  console.log('[Harness] canCurrentUserApprove — current user:', JSON.stringify(user));
+  logger.debug('UserService', 'canCurrentUserApprove — current user:', JSON.stringify(user));
 
   // Direct user match (uuid or email)
   const directMatch = approverUsers.some(
@@ -155,20 +156,20 @@ export async function canCurrentUserApprove(
          (u.email && u.email.toLowerCase() === user.email.toLowerCase())
   );
   if (directMatch) {
-    console.log('[Harness] canCurrentUserApprove → direct user match');
+    logger.debug('UserService', 'canCurrentUserApprove → direct user match');
     return true;
   }
 
   // No groups to check
   if (!approverGroups.length) {
-    console.log('[Harness] canCurrentUserApprove → no group match and no groups to check → false');
+    logger.debug('UserService', 'canCurrentUserApprove → no group match and no groups to check → false');
     return false;
   }
 
   // Check each group individually — runs in parallel, short-circuits on first match
-  console.log('[Harness] canCurrentUserApprove — checking groups:', approverGroups);
+  logger.debug('UserService', 'canCurrentUserApprove — checking groups:', approverGroups);
   const results = await Promise.all(approverGroups.map(g => isUserInGroup(config, g, user.uuid)));
   const result = results.some(Boolean);
-  console.log('[Harness] canCurrentUserApprove → group check result:', result);
+  logger.debug('UserService', 'canCurrentUserApprove → group check result:', result);
   return result;
 }
