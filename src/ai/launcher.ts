@@ -3,6 +3,7 @@
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 import * as os from 'os';
+import type { HarnessConfig } from '../config/configManager';
 
 export interface LaunchResult {
   type: 'response' | 'launched' | 'error';
@@ -15,7 +16,7 @@ export interface LaunchResult {
 interface LaunchOptions {
   prompt: string;
   toolId: 'claudecode-cli' | 'claudecode-ext' | 'cursor';
-  timeout?: number; // milliseconds, default 60000
+  config?: HarnessConfig; // Required for CLI timeout setting
   cwd?: string; // working directory for CLI execution
 }
 
@@ -24,7 +25,9 @@ interface LaunchOptions {
  */
 export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
   if (options.toolId === 'claudecode-cli') {
-    return launchCLI(options.prompt, options.timeout, options.cwd);
+    // Get timeout from config (in seconds), convert to milliseconds
+    const timeoutMs = options.config ? options.config.claudeCliTimeoutSeconds * 1000 : 90000;
+    return launchCLI(options.prompt, timeoutMs, options.cwd);
   } else if (options.toolId === 'claudecode-ext') {
     return launchExtension(options.prompt);
   } else if (options.toolId === 'cursor') {
@@ -41,7 +44,7 @@ export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
  * Launch Claude Code CLI subprocess
  * Runs: claude "<prompt>" --output-format json
  */
-async function launchCLI(prompt: string, timeout = 60000, cwd?: string): Promise<LaunchResult> {
+async function launchCLI(prompt: string, timeout: number, cwd?: string): Promise<LaunchResult> {
   return new Promise((resolve) => {
     const startTime = Date.now();
     let output = '';

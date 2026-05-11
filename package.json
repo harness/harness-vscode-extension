@@ -178,6 +178,13 @@
           ],
           "default": "info",
           "description": "Controls console output verbosity. Use 'debug' for troubleshooting, 'info' for normal operation, 'error' for production."
+        },
+        "harness.claudeCliTimeoutSeconds": {
+          "type": "number",
+          "default": 90,
+          "minimum": 30,
+          "maximum": 600,
+          "description": "Timeout for Claude Code CLI commands in seconds. Increase for complex queries requiring many API calls."
         }
       }
     },

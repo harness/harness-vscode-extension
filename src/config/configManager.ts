@@ -8,6 +8,7 @@ export interface HarnessConfig {
   projectIdentifier: string;
   pollingIntervalSeconds: number;
   diffAwareSTO: boolean;
+  claudeCliTimeoutSeconds: number;
   apiKey: string;
 }
 
@@ -39,12 +40,13 @@ export class ConfigManager {
     });
 
     return {
-      baseUrl:                cfg.get<string>('baseUrl', 'https://app.harness.io').replace(/\/$/, ''),
+      baseUrl:                  cfg.get<string>('baseUrl', 'https://app.harness.io').replace(/\/$/, ''),
       accountIdentifier,
       orgIdentifier,
       projectIdentifier,
-      pollingIntervalSeconds: cfg.get<number>('pollingIntervalSeconds', 10),
-      diffAwareSTO:           cfg.get<boolean>('diffAwareSTO', true),
+      pollingIntervalSeconds:   cfg.get<number>('pollingIntervalSeconds', 10),
+      diffAwareSTO:             cfg.get<boolean>('diffAwareSTO', true),
+      claudeCliTimeoutSeconds:  cfg.get<number>('claudeCliTimeoutSeconds', 90),
       apiKey,
     };
   }
