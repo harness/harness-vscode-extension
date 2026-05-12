@@ -2,6 +2,7 @@ import * as zlib from 'zlib';
 import { HarnessConfig } from '../config/configManager';
 import { WebviewBridge } from '../ui/webviewBridge';
 import { LayoutNode, ExecutionNode, ExecutionGraph } from './types';
+import { logger } from '../utils/logger';
 
 const TERMINAL_STATUSES = new Set(['SUCCESS', 'FAILED', 'ABORTED', 'SKIPPED', 'EXPIRED']);
 
@@ -45,6 +46,125 @@ const CONTAINER_STEP_TYPES = new Set([
 
 // ── ZIP / gzip extraction ─────────────────────────────────────────────────────
 
+/**
+ * Extract streaming ZIP (no central directory)
+ * Reads local file headers sequentially
+ */
+async function extractStreamingZip(buf: Buffer): Promise<string> {
+  const LOCAL_FILE_SIG = 0x04034b50;
+  const parts: string[] = [];
+  let offset = 0;
+
+  while (offset < buf.length - 30) {
+    // Check for local file header signature
+    if (buf.readUInt32LE(offset) !== LOCAL_FILE_SIG) {
+      break;
+    }
+
+    const method      = buf.readUInt16LE(offset + 8);
+    const flags       = buf.readUInt16LE(offset + 6);
+    const compSize    = buf.readUInt32LE(offset + 18);
+    const uncompSize  = buf.readUInt32LE(offset + 22);
+    const fnLen       = buf.readUInt16LE(offset + 26);
+    const extraLen    = buf.readUInt16LE(offset + 28);
+    const dataStart   = offset + 30 + fnLen + extraLen;
+    const bytesAfterDataStart = buf.length - dataStart;
+
+    // Check if bit 3 (0x0008) is set - indicates data descriptor present
+    const hasDataDescriptor = (flags & 0x0008) !== 0;
+
+    logger.debug('LogService', `Streaming ZIP entry at ${offset}:`, {
+      method,
+      hasDataDescriptor,
+      compSize,
+      uncompSize,
+    });
+
+    let actualCompSize = compSize;
+
+    if (compSize === 0 && uncompSize === 0 && hasDataDescriptor) {
+      // Scan for data descriptor signature (0x08074b50) or next local file header (0x04034b50)
+      const DATA_DESC_SIG = 0x08074b50;
+      let searchPos = dataStart;
+      let foundDescAt = -1;
+
+      // Search up to 10MB or end of buffer
+      const searchLimit = Math.min(dataStart + 10 * 1024 * 1024, buf.length - 16);
+
+      while (searchPos < searchLimit) {
+        const sig = buf.readUInt32LE(searchPos);
+        if (sig === DATA_DESC_SIG) {
+          foundDescAt = searchPos;
+          break;
+        }
+        if (sig === LOCAL_FILE_SIG) {
+          // Next entry starts here, descriptor must be just before
+          foundDescAt = searchPos - 16; // descriptor is 16 bytes (with sig) or 12 bytes (without)
+          break;
+        }
+        searchPos++;
+      }
+
+      if (foundDescAt > dataStart) {
+        actualCompSize = foundDescAt - dataStart;
+        logger.debug('LogService', `Data descriptor scan: found compSize=${actualCompSize}`);
+      } else {
+        // Could not find data descriptor
+        break;
+      }
+    }
+
+    if (dataStart + actualCompSize > buf.length) {
+      break;
+    }
+
+    const compressed = buf.slice(dataStart, dataStart + actualCompSize);
+
+    try {
+      let uncompressed: Buffer;
+
+      if (method === 0) {
+        // Stored (no compression)
+        uncompressed = compressed;
+      } else if (method === 8) {
+        // Deflate
+        uncompressed = await new Promise<Buffer>((resolve, reject) =>
+          zlib.inflateRaw(compressed, (e, r) => e ? reject(e) : resolve(r))
+        );
+      } else {
+        // Unknown compression method, skip
+        offset = dataStart + actualCompSize;
+        continue;
+      }
+
+      // Check if nested gzip
+      if (uncompressed.length > 2 && uncompressed[0] === 0x1f && uncompressed[1] === 0x8b) {
+        const decompressed = await new Promise<Buffer>((resolve, reject) =>
+          zlib.gunzip(uncompressed, (e, r) => e ? reject(e) : resolve(r))
+        );
+        parts.push(decompressed.toString('utf8'));
+      } else {
+        parts.push(uncompressed.toString('utf8'));
+      }
+    } catch {
+      /* skip corrupt entry */
+    }
+
+    offset = dataStart + actualCompSize;
+    if (hasDataDescriptor) {
+      // Skip past data descriptor (12 or 16 bytes)
+      const nextSig = buf.readUInt32LE(offset);
+      if (nextSig === 0x08074b50) {
+        offset += 16; // signature + crc + compSize + uncompSize
+      } else {
+        offset += 12; // crc + compSize + uncompSize (no signature)
+      }
+    }
+  }
+
+  return parts.join('\n');
+}
+
 async function extractAllFilesFromZip(buf: Buffer): Promise<string> {
   // Streaming ZIPs have compSize=0 in the local file header.
   // Read actual sizes from the Central Directory at the end of the file.
@@ -61,11 +181,17 @@ async function extractAllFilesFromZip(buf: Buffer): Promise<string> {
     }
   }
 
-  if (eocdOffset < 0) return buf.toString('utf8');
+  if (eocdOffset < 0) {
+    // Fall back to streaming ZIP - parse local file headers directly
+    return extractStreamingZip(buf);
+  }
 
   const totalEntries = buf.readUInt16LE(eocdOffset + 10);
   let cdOffset       = buf.readUInt32LE(eocdOffset + 16);
-  if (buf.readUInt32LE(cdOffset) !== CD_SIG) return buf.toString('utf8');
+
+  if (buf.readUInt32LE(cdOffset) !== CD_SIG) {
+    return buf.toString('utf8');
+  }
 
   const parts: string[] = [];
 
@@ -75,6 +201,7 @@ async function extractAllFilesFromZip(buf: Buffer): Promise<string> {
 
     const method      = buf.readUInt16LE(cdOffset + 10);
     const compSize    = buf.readUInt32LE(cdOffset + 20);
+    const uncompSize  = buf.readUInt32LE(cdOffset + 24);
     const localOffset = buf.readUInt32LE(cdOffset + 42);
     const fnLen       = buf.readUInt16LE(cdOffset + 28);
     const extraLen    = buf.readUInt16LE(cdOffset + 30);
@@ -86,15 +213,33 @@ async function extractAllFilesFromZip(buf: Buffer): Promise<string> {
     const compressed    = buf.slice(dataStart, dataStart + compSize);
 
     try {
+      let uncompressed: Buffer;
+
       if (method === 0) {
-        parts.push(compressed.toString('utf8'));
+        // Stored (no compression)
+        uncompressed = compressed;
       } else if (method === 8) {
-        const out = await new Promise<Buffer>((resolve, reject) =>
+        // Deflate
+        uncompressed = await new Promise<Buffer>((resolve, reject) =>
           zlib.inflateRaw(compressed, (e, r) => e ? reject(e) : resolve(r))
         );
-        parts.push(out.toString('utf8'));
+      } else {
+        // Unknown compression method, skip
+        continue;
       }
-    } catch { /* skip corrupt entry */ }
+
+      // Check if the uncompressed data is itself gzipped
+      if (uncompressed.length > 2 && uncompressed[0] === 0x1f && uncompressed[1] === 0x8b) {
+        const decompressed = await new Promise<Buffer>((resolve, reject) =>
+          zlib.gunzip(uncompressed, (e, r) => e ? reject(e) : resolve(r))
+        );
+        parts.push(decompressed.toString('utf8'));
+      } else {
+        parts.push(uncompressed.toString('utf8'));
+      }
+    } catch {
+      /* skip corrupt entry */
+    }
 
     cdOffset += 46 + fnLen + extraLen + commentLen;
   }
@@ -104,6 +249,7 @@ async function extractAllFilesFromZip(buf: Buffer): Promise<string> {
 
 async function decompressAndParse(buf: Buffer): Promise<string[]> {
   let text = '';
+
   // ZIP
   if (buf.length > 4 && buf.readUInt32LE(0) === 0x04034b50) {
     text = await extractAllFilesFromZip(buf);
@@ -115,13 +261,68 @@ async function decompressAndParse(buf: Buffer): Promise<string[]> {
         zlib.gunzip(buf, (e, r) => e ? reject(e) : resolve(r))
       );
       text = out.toString('utf8');
-    } catch { text = buf.toString('utf8'); }
+    } catch {
+      text = buf.toString('utf8');
+    }
+  }
+  // Deflate (raw DEFLATE without gzip wrapper)
+  else if (isBinaryData(buf)) {
+    // Try inflating as raw DEFLATE
+    try {
+      const out = await new Promise<Buffer>((resolve, reject) =>
+        zlib.inflateRaw(buf, (e, r) => e ? reject(e) : resolve(r))
+      );
+      text = out.toString('utf8');
+    } catch {
+      // If that fails, try regular inflate
+      try {
+        const out = await new Promise<Buffer>((resolve, reject) =>
+          zlib.inflate(buf, (e, r) => e ? reject(e) : resolve(r))
+        );
+        text = out.toString('utf8');
+      } catch {
+        // Last resort: treat as base64 and decode
+        try {
+          text = Buffer.from(buf.toString('utf8'), 'base64').toString('utf8');
+        } catch {
+          // Give up, return empty
+          return [];
+        }
+      }
+    }
   }
   // Plain text / NDJSON
   else {
     text = buf.toString('utf8');
   }
+
   return parseLogLines(text).slice(-200);
+}
+
+/**
+ * Detect if buffer contains binary data (not plain text)
+ * Checks for high ratio of control characters and non-printable bytes
+ */
+function isBinaryData(buf: Buffer): boolean {
+  if (buf.length === 0) return false;
+
+  // Sample first 1KB to check
+  const sample = buf.slice(0, Math.min(1024, buf.length));
+  let nonPrintable = 0;
+
+  for (const byte of sample) {
+    // Count non-printable bytes (excluding common whitespace: \t \n \r)
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0A && byte !== 0x0D) {
+      nonPrintable++;
+    }
+    // High bytes (> 0x7E) can be valid UTF-8, but excessive amounts indicate binary
+    if (byte > 0x7E) {
+      nonPrintable++;
+    }
+  }
+
+  // If more than 30% non-printable, likely binary/compressed
+  return (nonPrintable / sample.length) > 0.3;
 }
 
 function parseLogLines(text: string): string[] {
@@ -170,6 +371,7 @@ export async function fetchStepLogs(
   logBaseKey: string,
 ): Promise<string[]> {
   // ── Approach 1: blob/download (PAT, requires FF) ──────────────────────────
+  let zipFailed = false;
   try {
     const url = `${config.baseUrl}/gateway/log-service/blob/download` +
       `?accountID=${encodeURIComponent(config.accountIdentifier)}` +
@@ -203,15 +405,27 @@ export async function fetchStepLogs(
             const lines = await decompressAndParse(buf);
             clearTimeout(timeoutId);
             if (lines.length > 0) return lines;
+            // If we got 0 lines, mark as failed to try alternative approach
+            zipFailed = true;
+            logger.debug('LogService', 'ZIP extraction returned 0 lines, will try raw blob');
           }
         }
       }
       clearTimeout(timeoutId);
     } catch (err) {
       clearTimeout(timeoutId);
-      // Fall through to stream
+      zipFailed = true;
+      logger.debug('LogService', 'ZIP download/extraction failed:', err);
+      // Fall through to alternatives
     }
-  } catch { /* fall through to stream */ }
+  } catch {
+    zipFailed = true;
+    /* fall through to alternatives */
+  }
+
+  // ── Approach 1.5: Raw blob (alternative, currently unused) ───────────────
+  // Disabled: streaming ZIP parser now handles data descriptors correctly
+  // if (zipFailed) { ... }
 
   // ── Approach 2: stream endpoint (log-service token, no FF needed) ─────────
   try {
