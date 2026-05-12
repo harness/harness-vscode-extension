@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.4] - 2026-05-12
+
+### Added
+- **Configurable Claude CLI timeout**: New `harness.claudeCliTimeoutSeconds` setting
+  - Default: 90s (range: 30-600s)
+  - Allows users to increase timeout for complex AI queries requiring many API calls
+  - Applied only to Claude CLI subprocess execution (cursor/extension tools unaffected)
+- **VS Code Output panel logging**: Centralized logging system with user control
+  - All logs now appear in dedicated "Harness" channel (View → Output → Harness)
+  - Removed 220+ console.* calls to Developer Tools
+  - Timestamp and component prefixes for better readability
+  - FME Split.io SDK debug logs now respect `harness.logLevel` setting
+
+### Fixed
+- **Streaming ZIP parser for step logs**: Properly handles data descriptors in streaming ZIP files
+  - Fixes garbled/unreadable logs for Gitleaks, Wiz SAST, and similar security scanning steps
+  - Scans for data descriptor signature (0x08074b50) when compSize=0 in local file header
+  - Calculates actual compressed size by locating descriptor or next entry
+  - Skips past data descriptor (12 or 16 bytes) after processing each entry
+  - Preserves compatibility with standard ZIP files (EOCD-based)
+- **UI state management during log fetch**: Loading states now update correctly
+  - Added render() calls after STEP_LOGS_LOADING, STEP_LOGS_EMPTY, and STEP_LOGS_OPENED_IN_TAB messages
+  - Loading spinner displays immediately when clicking a step
+  - Proper "No logs available" state instead of stale content
+  - Shows "✓ Logs opened in editor tab" confirmation
+- **ANSI escape codes in logs**: Removes color codes and control characters for clean display
+  - Created utils/ansiStrip.ts utility to strip ANSI sequences
+  - Removes standard ANSI codes (\x1b[...m), OSC sequences, character sets, malformed UTF-8
+  - Applied in logEditorTab.ts before rendering in editor tabs
+
+### Changed
+- Cleaned up verbose debug logging throughout logService.ts for production readiness
+- Logger now initialized with OutputChannel in extension.ts activation
+- "Harness: Show Debug Output" and "Harness: Debug FME Flags" commands reference Output panel
+
 ## [0.1.3] - 2026-05-09
 
 ### Fixed
