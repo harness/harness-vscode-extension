@@ -562,21 +562,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.debug('Bridge', 'Sending message:', message.type);
 
     origSend(message);
-    if (message.type === 'EXECUTION_UPDATE') {
-      const ex = message.execution;
-      statusBar.updateFromStatus(ex.status, ex.name ?? ex.pipelineIdentifier ?? 'Pipeline');
-      // Track execution being viewed from live mode
-      currentViewedExecution = {
-        execution: ex,
-        executionGraph: message.executionGraph,
-        source: 'live',
-      };
-      logger.debug('Extension', 'Tracked EXECUTION_UPDATE:', {
-        name: ex.name,
-        planExecutionId: ex.planExecutionId,
-        hasGraph: !!message.executionGraph,
-      });
-    } else if (message.type === 'HISTORY_DETAIL') {
+    // Process HISTORY_DETAIL first - it should take precedence over EXECUTION_UPDATE
+    if (message.type === 'HISTORY_DETAIL') {
       // Track execution when viewing from history
       currentViewedExecution = {
         execution: message.execution,
@@ -588,6 +575,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         planExecutionId: message.execution.planExecutionId,
         hasGraph: !!message.executionGraph,
       });
+    } else if (message.type === 'EXECUTION_UPDATE') {
+      const ex = message.execution;
+      statusBar.updateFromStatus(ex.status, ex.name ?? ex.pipelineIdentifier ?? 'Pipeline');
+      // Track execution being viewed from live mode
+      // Don't overwrite history detail executions
+      if (currentViewedExecution?.source !== 'history') {
+        currentViewedExecution = {
+          execution: ex,
+          executionGraph: message.executionGraph,
+          source: 'live',
+        };
+        logger.debug('Extension', 'Tracked EXECUTION_UPDATE:', {
+          name: ex.name,
+          planExecutionId: ex.planExecutionId,
+          hasGraph: !!message.executionGraph,
+        });
+      } else {
+        // Update the execution data but keep source as 'history'
+        currentViewedExecution.execution = ex;
+        currentViewedExecution.executionGraph = message.executionGraph;
+        logger.debug('Extension', 'Updated EXECUTION_UPDATE (keeping history source):', {
+          name: ex.name,
+          planExecutionId: ex.planExecutionId,
+        });
+      }
     } else if (message.type === 'NO_EXECUTION') {
       statusBar.setIdle();
       // Only clear tracked execution if it's from live mode
