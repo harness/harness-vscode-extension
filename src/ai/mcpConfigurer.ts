@@ -55,6 +55,7 @@ function buildHarnessServerConfig(options: ConfigureOptions): MCPServerConfig {
 
 /**
  * Write Harness MCP config to global scope (~/.claude.json)
+ * Only writes to top-level mcpServers (truly global, no project-specific entries)
  */
 function writeGlobalScope(globalPath: string, harnessConfig: MCPServerConfig): void {
   let config: ClaudeDesktopConfig = {};
@@ -74,7 +75,7 @@ function writeGlobalScope(globalPath: string, harnessConfig: MCPServerConfig): v
     }
   }
 
-  // Configure GLOBAL mcpServers (used when not in a project directory)
+  // Configure GLOBAL mcpServers (applies to all projects)
   if (!config.mcpServers) {
     config.mcpServers = {};
   }
@@ -86,42 +87,6 @@ function writeGlobalScope(globalPath: string, harnessConfig: MCPServerConfig): v
     args: existingGlobalHarness?.args || harnessConfig.args,
     env: { ...existingGlobalEnv, ...harnessConfig.env },
   };
-
-  // Configure PROJECT-SPECIFIC mcpServers (used when inside a project directory)
-  // Get current working directory to determine project key
-  const cwd = process.cwd();
-  if (!config.projects) {
-    config.projects = {};
-  }
-
-  // Add to ALL existing projects (so it works regardless of which project you're in)
-  const projectKeys = Object.keys(config.projects);
-  if (projectKeys.length > 0) {
-    for (const projectPath of projectKeys) {
-      if (!config.projects[projectPath].mcpServers) {
-        config.projects[projectPath].mcpServers = {};
-      }
-      const existingProjectHarness = config.projects[projectPath].mcpServers!.harness;
-      const existingProjectEnv = existingProjectHarness?.env || {};
-      config.projects[projectPath].mcpServers!.harness = {
-        ...harnessConfig,
-        command: existingProjectHarness?.command || harnessConfig.command,
-        args: existingProjectHarness?.args || harnessConfig.args,
-        env: { ...existingProjectEnv, ...harnessConfig.env },
-      };
-    }
-    logger.debug('MCP', `Configured Harness MCP for ${projectKeys.length} project(s)`);
-  }
-
-  // Also add to current working directory if it's not already in projects
-  if (cwd && !config.projects[cwd]) {
-    config.projects[cwd] = {
-      mcpServers: {
-        harness: harnessConfig,
-      },
-    };
-    logger.debug('MCP', `Added Harness MCP to current project: ${cwd}`);
-  }
 
   // Write config with pretty formatting (preserves other top-level fields)
   const configJson = JSON.stringify(config, null, 2);
