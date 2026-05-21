@@ -12,7 +12,7 @@ let splitClient: SplitIO.IClient | null = null;
 let userKey: string | null = null;
 let cachedLogViewerVariation: 'inline' | 'expanded' | 'drawer' = 'expanded';
 let cachedWebviewThemeVariation: 'simple' | 'enhanced' = 'enhanced';
-let cachedAiChatEnabled: boolean = false; // Default to disabled until flag confirms
+let cachedAiChatEnabled: boolean = true; // Default to enabled (fail-safe for FME failures)
 let readyPromise: Promise<void> | null = null;
 let onUpdateCallback: (() => void) | null = null;
 
@@ -39,9 +39,9 @@ function updateCachedVariations(): void {
 
   const aiChatTreatment = splitClient.getTreatment(userKey, 'vscode-mcp-integration');
   logger.debug('FME', 'vscode-mcp-integration treatment received:', aiChatTreatment);
-  // Only enable if explicitly set to 'on', otherwise disable
-  // (handles 'off', 'control', or any other treatment as disabled)
-  cachedAiChatEnabled = aiChatTreatment === 'on';
+  // Default to enabled (true) unless explicitly set to 'off'
+  // This ensures AI bar is ON by default if FME fails or returns 'control'
+  cachedAiChatEnabled = aiChatTreatment !== 'off';
 
   logger.debug('FME', '✓ Cached log viewer variation:', cachedLogViewerVariation);
   logger.debug('FME', '✓ Cached webview theme variation:', cachedWebviewThemeVariation);

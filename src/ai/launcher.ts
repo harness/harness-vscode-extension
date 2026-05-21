@@ -16,7 +16,7 @@ export interface LaunchResult {
 
 interface LaunchOptions {
   prompt: string;
-  toolId: 'claudecode-cli' | 'claudecode-ext' | 'cursor';
+  toolId: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot';
   config?: HarnessConfig; // Required for CLI timeout setting
   cwd?: string; // working directory for CLI execution
   mcpConfigPath?: string;   // NEW — explicit MCP file to load
@@ -34,6 +34,8 @@ export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
     return launchExtension(options.prompt);
   } else if (options.toolId === 'cursor') {
     return launchCursor(options.prompt);
+  } else if (options.toolId === 'copilot') {
+    return launchCopilot(options.prompt);
   } else {
     return {
       type: 'error',
@@ -404,6 +406,95 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
     return {
       type: 'error',
       error: error instanceof Error ? error.message : 'Failed to launch Cursor',
+    };
+  }
+}
+
+/**
+ * Launch GitHub Copilot with prompt
+ * Opens GitHub Copilot Chat and auto-pastes the prompt
+ */
+async function launchCopilot(prompt: string): Promise<LaunchResult> {
+  try {
+    logger.debug('AI Launcher', 'Starting GitHub Copilot integration');
+    logger.debug('AI Launcher', 'Prompt length:', prompt.length);
+
+    // List all available commands to find the right one
+    const allCommands = await vscode.commands.getCommands(true);
+    const copilotCommands = allCommands.filter(cmd =>
+      cmd.toLowerCase().includes('copilot') ||
+      cmd.toLowerCase().includes('github')
+    );
+    logger.debug('AI Launcher', 'Available Copilot commands:', copilotCommands);
+
+    // Copy prompt to clipboard
+    await vscode.env.clipboard.writeText(prompt);
+    logger.debug('AI Launcher', '✓ Prompt copied to clipboard');
+
+    // Try opening GitHub Copilot Chat
+    const commandsToTry = [
+      'workbench.action.chat.open',  // Open chat panel
+      'github.copilot.chat.focus',  // Focus Copilot chat
+      'workbench.panel.chat.view.copilot.focus',  // Focus Copilot panel view
+    ];
+
+    let opened = false;
+    for (const cmd of commandsToTry) {
+      if (copilotCommands.includes(cmd) || allCommands.includes(cmd)) {
+        try {
+          logger.debug('AI Launcher', `⏳ Trying command: ${cmd}`);
+          await vscode.commands.executeCommand(cmd);
+          logger.debug('AI Launcher', `✓ Opened with: ${cmd}`);
+          opened = true;
+          break;
+        } catch (err) {
+          logger.debug('AI Launcher', `⚠ ${cmd} failed`);
+        }
+      }
+    }
+
+    if (!opened) {
+      logger.debug('AI Launcher', '✗ Could not open GitHub Copilot with any command');
+      vscode.window.showWarningMessage('Could not open GitHub Copilot. Please open it manually and try again.');
+      return {
+        type: 'error',
+        error: 'Failed to open GitHub Copilot',
+      };
+    }
+
+    // Give UI time to render and focus
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // Auto-paste without user interaction
+    logger.debug('AI Launcher', 'Auto-pasting prompt...');
+    try {
+      await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
+      logger.debug('AI Launcher', '✓ Auto-paste successful');
+
+      // Show brief success notification
+      vscode.window.showInformationMessage(
+        '✅ Prompt sent to GitHub Copilot',
+        { modal: false }
+      );
+    } catch (err) {
+      logger.debug('AI Launcher', '⚠ Auto-paste failed, showing fallback notification');
+      // Fallback: show notification if auto-paste fails
+      vscode.window.showInformationMessage(
+        'Prompt copied to clipboard - paste it in GitHub Copilot (Cmd+V)',
+        'OK'
+      );
+    }
+
+    logger.debug('AI Launcher', '✓ GitHub Copilot launch complete');
+    return {
+      type: 'launched',
+      content: 'Prompt auto-pasted to GitHub Copilot.',
+    };
+  } catch (error) {
+    logger.error('AI Launcher', '✗ GitHub Copilot launch failed:', error);
+    return {
+      type: 'error',
+      error: error instanceof Error ? error.message : 'Failed to launch GitHub Copilot',
     };
   }
 }

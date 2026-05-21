@@ -201,7 +201,7 @@ FME flag `vscode-bar-experience`:
 
 ## AI Integration
 
-Supports **Claude Code** (CLI/Extension) and **Cursor AI** with automatic context injection via MCP.
+Supports **Claude Code** (CLI/Extension), **Cursor AI**, and **GitHub Copilot** with automatic context injection via MCP.
 
 ### Claude Code
 - **CLI mode**: Fully automated (spawns subprocess, response in sidebar)
@@ -213,13 +213,25 @@ Supports **Claude Code** (CLI/Extension) and **Cursor AI** with automatic contex
 - **Recommended**: Install [Harness Cursor Plugin](https://cursor.com/plugins) — OAuth, zero config
 - **Fallback**: Local MCP configuration (harness-mcp-v2)
 
+### GitHub Copilot
+- Auto-detected via VS Code extensions API (only in VS Code, not Cursor)
+- Opens Copilot Chat and auto-pastes prompt
+- Uses `"servers"` key in MCP config (Copilot-specific format)
+- Environment variable inheritance: When using env var auth, only org/project IDs in config (credentials inherited from VS Code process)
+
 **MCP Configuration:**
-- **Claude Code**: `~/.claude.json` (global + all project-specific)
+- **Claude Code**: `~/.claude.json` (global) or `<workspace>/.mcp.json` (project)
 - **Cursor**: 
   - macOS/Linux: `~/.cursor/mcp.json`
   - Windows: `%APPDATA%\Cursor\User\mcp.json`
+- **GitHub Copilot**:
+  - Project: `.vscode/mcp.json`
+  - Global (macOS): `~/Library/Application Support/Code/User/mcp.json`
+  - Global (Windows): `%APPDATA%\Code\User\mcp.json`
+  - Global (Linux): `~/.config/Code/User/mcp.json`
 - Preserves existing config, only updates Harness MCP fields
-- User must restart Claude Code/Cursor to activate
+- User must restart AI tool to activate
+- **Auth handling**: When `authSource === 'env'`, writes environment variable references (`${HARNESS_API_KEY}`); when `authSource === 'pat'`, writes actual credentials
 
 **Prompt Context:**
 - Pipeline name, status, execution ID
@@ -242,6 +254,9 @@ Supports **Claude Code** (CLI/Extension) and **Cursor AI** with automatic contex
 - `vscode-log-experience` — Log viewer mode (inline/expanded/drawer)
 - `vscode-bar-experience` — Theme (simple/enhanced)
 - `vscode-mcp-integration` — AI chat integration toggle
+  - **Default**: ON (enabled by default for fail-safe behavior)
+  - **'on'** or **'control'**: Enabled
+  - **'off'**: Disabled (only way to turn off AI bar)
 
 ---
 

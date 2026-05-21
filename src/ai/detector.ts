@@ -10,7 +10,7 @@ import { logger } from '../utils/logger';
 import { MCPScope, MCPDetectionState } from './types';
 
 export interface DetectedTool {
-  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor';
+  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot';
   name: string;
   sub: string | null;
   mcpReady: boolean;
@@ -386,7 +386,102 @@ async function detectCursor(): Promise<DetectedTool | null> {
 }
 
 /**
- * Detect all available AI tools (Claude Code CLI + Extension + Cursor)
+ * Get GitHub Copilot MCP config paths (cross-platform)
+ * - Local (project): .vscode/mcp.json
+ * - Global (user):
+ *   - macOS: ~/Library/Application Support/Code/User/mcp.json
+ *   - Windows: %APPDATA%\Code\User\mcp.json
+ *   - Linux: ~/.config/Code/User/mcp.json
+ */
+function getCopilotMcpPaths(): { local: string | null; global: string } {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  const local = workspaceFolder ? path.join(workspaceFolder.uri.fsPath, '.vscode', 'mcp.json') : null;
+
+  let global: string;
+  if (process.platform === 'darwin') {
+    global = path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'mcp.json');
+  } else if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    global = path.join(appData, 'Code', 'User', 'mcp.json');
+  } else {
+    // Linux
+    global = path.join(os.homedir(), '.config', 'Code', 'User', 'mcp.json');
+  }
+
+  return { local, global };
+}
+
+/**
+ * Read Harness MCP config from a GitHub Copilot config file
+ * GitHub Copilot uses "servers" key instead of "mcpServers"
+ */
+function readHarnessFromCopilotFile(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const harness = config?.servers?.harness;
+    if (!harness) return false;
+    const hasCommand = typeof harness.command === 'string' && harness.command.length > 0;
+    const hasEnv = harness.env && typeof harness.env === 'object';
+    return hasCommand && hasEnv;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if Harness MCP is configured in GitHub Copilot
+ * Priority: local (.vscode/mcp.json) > global (~/Library/Application Support/Code/User/mcp.json)
+ */
+function checkCopilotMcpReady(): boolean {
+  const paths = getCopilotMcpPaths();
+
+  // Check local first
+  if (paths.local && readHarnessFromCopilotFile(paths.local)) {
+    return true;
+  }
+
+  // Fall back to global
+  return readHarnessFromCopilotFile(paths.global);
+}
+
+/**
+ * Detect GitHub Copilot via VS Code extensions API
+ * Only detects in VS Code (not Cursor or other distributions)
+ */
+async function detectGitHubCopilot(): Promise<DetectedTool | null> {
+  try {
+    // Only detect in VS Code, not Cursor
+    const isVSCode = !vscode.env.appName.toLowerCase().includes('cursor');
+    if (!isVSCode) {
+      return null;
+    }
+
+    // Check if GitHub Copilot extension is installed
+    const copilotExtension = vscode.extensions.getExtension('GitHub.copilot') ||
+                            vscode.extensions.getExtension('GitHub.copilot-chat');
+
+    if (!copilotExtension) {
+      return null;
+    }
+
+    // Check MCP configuration
+    const mcpReady = checkCopilotMcpReady();
+
+    return {
+      id: 'copilot',
+      name: 'GitHub Copilot',
+      sub: null,
+      mcpReady,
+      path: copilotExtension.extensionPath,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Detect all available AI tools (Claude Code CLI + Extension + Cursor + GitHub Copilot)
  * Returns preferred tool as activeTool, or first available if no preference
  */
 export async function detectAITools(preferredToolId?: string): Promise<DetectionResult> {
@@ -408,6 +503,12 @@ export async function detectAITools(preferredToolId?: string): Promise<Detection
   const cursor = await detectCursor();
   if (cursor) {
     tools.push(cursor);
+  }
+
+  // Detect GitHub Copilot
+  const copilot = await detectGitHubCopilot();
+  if (copilot) {
+    tools.push(copilot);
   }
 
   // Use preferred tool if specified and available, otherwise default to first

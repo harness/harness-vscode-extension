@@ -326,7 +326,7 @@ const state = {
   ideThemeKind: 1 as number, // 1=Light, 2=Dark, 3=HighContrast, 4=HighContrastLight
 
   // AI chat feature flag (FME vscode-mcp-integration flag)
-  aiChatEnabled: false as boolean, // from FME flag, default to disabled until flag confirms
+  aiChatEnabled: true as boolean, // from FME flag, default to enabled (fail-safe for FME failures)
 
   // App menu state
   menuOpen: false,
@@ -1648,6 +1648,7 @@ const AI_TOOL_META: Record<string, { name: string; sub: string | null }> = {
   'claudecode-cli': { name: 'Claude Code', sub: 'CLI' },
   'claudecode-ext': { name: 'Claude Code', sub: 'Extension' },
   'cursor': { name: 'Cursor', sub: null },
+  'copilot': { name: 'GitHub Copilot', sub: null },
 };
 
 // Tool glyphs
@@ -1670,10 +1671,18 @@ function cursorGlyph(): string {
   </svg>`;
 }
 
+function copilotGlyph(): string {
+  // GitHub Copilot logo (GitHub mark)
+  return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z" fill="currentColor"/>
+  </svg>`;
+}
+
 function getAIToolGlyph(toolId: string): string {
   if (toolId === 'claudecode-cli') return claudeCliGlyph();
   if (toolId === 'claudecode-ext') return claudeExtGlyph();
   if (toolId === 'cursor') return cursorGlyph();
+  if (toolId === 'copilot') return copilotGlyph();
   return '';
 }
 
@@ -1756,6 +1765,28 @@ function renderAIToolPicker(): string {
   return `<div class="aix-picker"><div class="aix-picker-head">Choose AI tool</div>${items}</div>`;
 }
 
+/**
+ * Get MCP config path display for a given tool and scope
+ */
+function getMcpPathDisplay(toolId: string, scope: 'project' | 'global'): string {
+  if (toolId === 'copilot') {
+    if (scope === 'project') {
+      return '<workspace>/.vscode/mcp.json';
+    }
+    // Global paths are OS-specific for Copilot
+    if (navigator.platform.toLowerCase().includes('win')) {
+      return '%APPDATA%\\Code\\User\\mcp.json';
+    } else if (navigator.platform.toLowerCase().includes('mac')) {
+      return '~/Library/Application Support/Code/User/mcp.json';
+    } else {
+      return '~/.config/Code/User/mcp.json';
+    }
+  }
+
+  // Claude Code (CLI and Extension)
+  return scope === 'project' ? '<workspace>/.mcp.json' : '~/.claude.json';
+}
+
 function renderAIMCPCard(): string {
   if (state.aiOverlay !== 'mcp-setup' && state.aiOverlay !== 'mcp-done' && state.aiOverlay !== 'mcp-existing' && state.aiOverlay !== 'mcp-conflict') return '';
   const activeTool = state.aiDetection?.activeTool;
@@ -1788,15 +1819,17 @@ function renderAIMCPCard(): string {
   // Done toast
   if (state.aiOverlay === 'mcp-done') {
     const doneScope = state.aiMcpDoneScope || 'global';
-    const pathDisplay = doneScope === 'project' ? '<workspace>/.mcp.json' : '~/.claude.json';
+    const pathDisplay = getMcpPathDisplay(activeTool, doneScope);
     return `<div class="aix-overlay aix-overlay-done"><span class="aix-overlay-check">${checkIcon()}</span><div class="aix-overlay-done-text"><strong>Harness MCP configured for ${esc(meta.name)}.</strong><span>Wrote <code class="mono">${esc(pathDisplay)}</code> · restart ${esc(meta.name)} to activate.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div>`;
   }
 
   // Setup card with scope picker
   const busyClass = state.aiMcpConfiguring ? 'is-busy' : '';
   const busyContent = state.aiMcpConfiguring ? `<span class="aix-send-spin"></span> Configuring…` : (state.aiMcpSetupScope === 'project' ? 'Configure for this project' : 'Configure globally');
-  const writesTo = state.aiMcpSetupScope === 'project' ? '<workspace>/.mcp.json' : '~/.claude.json';
-  const tipText = state.aiMcpSetupScope === 'project' ? 'Lives in your workspace root.' : 'Lives in your home folder. Only you use it; applies to every project you open.';
+  const writesTo = getMcpPathDisplay(activeTool, state.aiMcpSetupScope || 'global');
+  const tipText = state.aiMcpSetupScope === 'project'
+    ? (activeTool === 'copilot' ? 'Lives in .vscode/ folder.' : 'Lives in your workspace root.')
+    : 'Lives in your home folder. Only you use it; applies to every project you open.';
 
   return `<div class="aix-overlay aix-overlay-setup"><div class="aix-setup-hdr"><span class="aix-setup-glyph">${glyph}</span><div class="aix-setup-title"><strong>Configure Harness MCP</strong><span>Lets ${esc(meta.name)} fetch pipeline data, logs &amp; executions.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-scope-label-row"><span class="aix-setup-k">Where</span></div><div class="aix-scope"><button type="button" class="aix-scope-opt ${state.aiMcpSetupScope === 'project' ? 'on' : ''}" data-action="setMCPScope" data-scope="project"><span class="aix-scope-ico">${folderIcon()}</span><span class="aix-scope-text"><strong>This project</strong><span>shared with teammates if committed</span></span><span class="aix-scope-radio" aria-hidden></span></button><button type="button" class="aix-scope-opt ${state.aiMcpSetupScope === 'global' ? 'on' : ''}" data-action="setMCPScope" data-scope="global"><span class="aix-scope-ico">${homeIcon()}</span><span class="aix-scope-text"><strong>All my projects</strong><span>personal, every repo</span></span><span class="aix-scope-radio" aria-hidden></span></button></div><div class="aix-setup-meta"><div class="aix-setup-row"><span class="aix-setup-k">Writes to</span><code class="aix-setup-v mono">${esc(writesTo)}</code></div><div class="aix-setup-row"><span class="aix-setup-k">Auth</span><span class="aix-setup-v">Uses your stored Harness PAT</span></div></div><div class="aix-scope-tip"><span class="aix-scope-tip-ico">${infoIcon()}</span><span>${esc(tipText)}</span></div><div class="aix-setup-acts"><button type="button" class="aix-btn-primary ${busyClass}" data-action="configureAIMCP" ${state.aiMcpConfiguring ? 'disabled' : ''}>${busyContent}</button><button type="button" class="aix-btn-ghost" data-action="closeAIMCPCard">Not now</button></div></div>`;
 }

@@ -18,7 +18,7 @@ import { initFmeClient, destroyFmeClient, getLogViewerVariation } from './fme/fm
 import { LogContentProvider, LOG_SCHEME } from './logs/logContentProvider';
 import { openLogAsEditorTab } from './logs/logEditorTab';
 import { detectAITools } from './ai/detector';
-import { configureMCP } from './ai/mcpConfigurer';
+import { configureMCP, configureCopilotMCP } from './ai/mcpConfigurer';
 import { buildPrompt } from './ai/promptBuilder';
 import { launchAI } from './ai/launcher';
 import { logger } from './utils/logger';
@@ -446,23 +446,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       try {
-        const apiKey = await secretStore.getApiKey();
+        // Check auth source
+        const authSource = vscode.workspace.getConfiguration('harness').get<string>('authSource', 'pat');
+        const credentialSource = authSource as 'env' | 'pat';
+
+        // Get API key from environment variables or secret store
+        const envCreds = readEnvCredentials();
+        const apiKey = envCreds.apiKey || await secretStore.getApiKey();
+
         if (!apiKey) {
           bridge.send({
             type: 'AI_ERROR',
-            message: 'No API key found. Please configure Harness API key first.',
+            message: 'No API key found. Please configure Harness API key first or set HARNESS_API_KEY environment variable.',
           });
           return;
         }
 
-        const result = await configureMCP({
+        // Choose the right configurer based on active tool
+        const configOptions = {
           apiKey,
           baseUrl: currentConfig.baseUrl,
           accountId: currentConfig.accountIdentifier,
           orgId: currentConfig.orgIdentifier,
           projectId: currentConfig.projectIdentifier,
-          scope,                                          // NEW
-        });
+          scope,
+          credentialSource,  // Pass auth source so MCP config uses env vars when appropriate
+        };
+
+        const result = tool?.id === 'copilot'
+          ? await configureCopilotMCP(configOptions)
+          : await configureMCP(configOptions);
 
         // Get active tool to send back in confirmation
         const updatedDetection = await detectAITools(getAIToolPreference());
