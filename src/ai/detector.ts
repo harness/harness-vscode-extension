@@ -298,6 +298,22 @@ function isCursorPluginOAuthReady(cursorDir: string): boolean {
  * Detect Cursor AI editor
  * Only detects when running inside Cursor editor (not VS Code)
  */
+/**
+ * Get Cursor config directory (cross-platform)
+ * - macOS/Linux: ~/.cursor
+ * - Windows: %APPDATA%\Cursor\User
+ */
+function getCursorConfigDir(): string {
+  if (process.platform === 'win32') {
+    // Windows: C:\Users\username\AppData\Roaming\Cursor\User
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'Cursor', 'User');
+  } else {
+    // macOS/Linux: ~/.cursor
+    return path.join(os.homedir(), '.cursor');
+  }
+}
+
 async function detectCursor(): Promise<DetectedTool | null> {
   try {
     // Step 0 - Are we running in Cursor editor?
@@ -310,7 +326,7 @@ async function detectCursor(): Promise<DetectedTool | null> {
     }
 
     // Step 1 - Is Cursor installed?
-    const cursorDir = path.join(os.homedir(), '.cursor');
+    const cursorDir = getCursorConfigDir();
     const cursorInstalled = fs.existsSync(cursorDir);
 
     if (!cursorInstalled) {
