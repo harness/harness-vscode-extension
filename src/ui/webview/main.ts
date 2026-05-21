@@ -341,6 +341,11 @@ const state = {
   aiMcpDoneScope: null as 'project' | 'global' | null,         // NEW — which scope was just written (for the toast)
   aiResponse: null as { content: string; toolCalls?: Array<{ name: string }>; durationMs?: number } | null,
   aiError: null as string | null,
+
+  // Env var onboarding state
+  envDetection: null as { allPresent: boolean; baseUrl: string | null; apiKey: string | null; accountId: string | null } | null,
+  envDisclosureOpen: false as boolean, // false → Panel D, true → Panel E
+  envOnboardingChoice: 'env' as 'env' | 'pat', // which choice card is selected in Panel A
 };
 
 // ── Dynamic page size calculation ──────────────────────────────────────────
@@ -483,6 +488,12 @@ window.addEventListener('message', ({ data: msg }) => {
         state.aiChatEnabled = msg.aiChatEnabled;
         console.log('[Webview] AI chat enabled:', state.aiChatEnabled);
       }
+      break;
+
+    case 'envDetection':
+      state.envDetection = msg.envDetection;
+      console.log('[Webview] envDetection received:', state.envDetection);
+      scheduleRender(true);
       applyEffectiveTheme();
 
       // If org/project changed, reset history/detail state
@@ -3294,6 +3305,103 @@ function opaRow(ex: ExecState): string {
 }
 
 function notConfigured(): string {
+  // If env vars are all present, show Panel A (choice between env vs manual)
+  if (state.envDetection?.allPresent) {
+    return renderPanelA();
+  }
+
+  // If disclosure is open, show Panel E (instructions)
+  if (state.envDisclosureOpen) {
+    return renderPanelE();
+  }
+
+  // Otherwise, show Panel D (existing setup screen) with disclosure link
+  return renderPanelD();
+}
+
+function renderPanelA(): string {
+  const isEnv = state.envOnboardingChoice === 'env';
+  const isPat = state.envOnboardingChoice === 'pat';
+  const buttonLabel = isEnv ? 'Connect with env vars' : 'Start setup';
+  const buttonAction = isEnv ? 'connectWithEnv' : 'configure';
+
+  return `<div class="onboarding-empty">
+    <!-- Title -->
+    <div style="font-size:13px;font-weight:600;color:var(--fg-0);margin-bottom:3px">Connect to Harness</div>
+    <div style="font-size:11px;color:var(--fg-2);margin-bottom:14px">How would you like to sign in?</div>
+
+    <!-- Detected banner -->
+    <div style="padding:9px 11px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);margin-bottom:14px;font-size:11px;line-height:1.5;color:var(--fg-1)">
+      <strong style="color:var(--fg-0)">Environment variables detected.</strong> We can use them directly — nothing gets stored or copied.
+    </div>
+
+    <!-- Choice card 1 (env) -->
+    <div data-action="selectEnvChoice" data-choice="env" style="border:1px solid ${isEnv ? 'var(--accent)' : 'var(--line)'};background:${isEnv ? 'var(--accent-soft)' : 'var(--bg-2)'};border-radius:var(--r-lg);padding:11px 12px;margin-bottom:10px;cursor:pointer;transition:all 100ms ease">
+      <div style="font-size:12px;font-weight:600;color:var(--fg-0);margin-bottom:2px">Use environment variables</div>
+      <div style="font-size:11px;color:var(--fg-2);line-height:1.45">Reads <code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 4px;border-radius:3px;color:var(--fg-2)">HARNESS_API_KEY</code>, <code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 4px;border-radius:3px;color:var(--fg-2)">HARNESS_BASE_URL</code> and <code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 4px;border-radius:3px;color:var(--fg-2)">HARNESS_ACCOUNT_ID</code> from your shell.</div>
+    </div>
+
+    <!-- Choice card 2 (manual) -->
+    <div data-action="selectEnvChoice" data-choice="pat" style="border:1px solid ${isPat ? 'var(--accent)' : 'var(--line)'};background:${isPat ? 'var(--accent-soft)' : 'var(--bg-2)'};border-radius:var(--r-lg);padding:11px 12px;margin-bottom:14px;cursor:pointer;transition:all 100ms ease">
+      <div style="font-size:12px;font-weight:600;color:var(--fg-0);margin-bottom:2px">Set up manually</div>
+      <div style="font-size:11px;color:var(--fg-2);line-height:1.45">Enter a Personal Access Token and Account ID. Stored in IDE secret storage.</div>
+    </div>
+
+    <!-- Primary button -->
+    <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer;margin-bottom:12px" data-action="${buttonAction}" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">${buttonLabel}</button>
+
+    <!-- Switch-later hint -->
+    <div style="font-size:10.5px;color:var(--fg-2);text-align:center;line-height:1.5">
+      You can switch later via <code style="font-family:var(--font-mono);color:var(--fg-2)">Harness: Configure Access</code>.
+    </div>
+  </div>`;
+}
+
+function renderPanelE(): string {
+  const hasVars = state.envDetection?.allPresent ?? false;
+  const statusText = hasVars
+    ? '<strong style="color:var(--fg-0)">All detected.</strong> Click Connect below to proceed.'
+    : '<strong style="color:var(--fg-0)">None detected yet.</strong> After exporting, click reload below — or run <code style="font-family:var(--font-mono);color:var(--accent)">Developer: Reload Window</code>.';
+
+  return `<div class="onboarding-empty">
+    <!-- Back link -->
+    <div style="margin-bottom:14px">
+      <a href="#" data-action="closeEnvDisclosure" style="font-size:11px;color:var(--accent);text-decoration:none;cursor:pointer">← Back</a>
+    </div>
+
+    <!-- Heading -->
+    <div style="font-size:13px;font-weight:600;color:var(--fg-0);margin-bottom:10px">Use <code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 5px;border-radius:3px;color:var(--fg-2);font-size:12px">HARNESS_*</code> environment variables</div>
+
+    <!-- Intro -->
+    <div style="font-size:11.5px;color:var(--fg-2);line-height:1.55;margin-bottom:14px">
+      The Harness Extension supports these three variables. Set them in your shell profile, then reload the IDE window and we'll pick them up automatically.
+    </div>
+
+    <!-- Code block -->
+    <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-lg);padding:11px 12px;margin-bottom:12px;font-family:var(--font-mono);font-size:10.5px;color:var(--fg-1);line-height:1.7;position:relative">
+      <div>export HARNESS_BASE_URL=https://app.harness.io</div>
+      <div>export HARNESS_API_KEY=pat.xxxxx</div>
+      <div>export HARNESS_ACCOUNT_ID=xxxxx</div>
+      <button data-action="copyEnvVars" style="position:absolute;top:8px;right:8px;padding:4px 8px;background:var(--bg-3);border:1px solid var(--line);border-radius:4px;font-family:var(--font-sans);font-size:10px;font-weight:500;color:var(--fg-1);cursor:pointer" onmouseover="this.style.background='var(--bg-4)'" onmouseout="this.style.background='var(--bg-3)'">Copy</button>
+    </div>
+
+    <!-- Status block -->
+    <div style="padding:9px 11px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);margin-bottom:12px;font-size:11px;line-height:1.5;color:var(--fg-1)">
+      ${statusText}
+    </div>
+
+    <!-- Reload button -->
+    <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer;margin-bottom:14px" data-action="reloadWindowEnv" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">Reload window and re-check</button>
+
+    <!-- About card -->
+    <div style="padding:10px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;gap:4px">
+      <div style="font-size:11px;font-weight:600;color:var(--fg-0)">About env vars</div>
+      <div style="font-size:10.5px;color:var(--fg-2);line-height:1.5">Vars are read once per session and never written to disk. The PAT setup path stores your token in IDE secret storage — both are equally secure, just different lifetimes.</div>
+    </div>
+  </div>`;
+}
+
+function renderPanelD(): string {
   // Shield icon for footnote (11x11)
   const shieldIcon = `<svg width="11" height="11" viewBox="0 0 12 12" style="flex-shrink:0;margin-top:1px">
     <path d="M6 1.5 L10 3 L10 6.2 Q10 9 6 10.5 Q2 9 2 6.2 L2 3 Z"
@@ -3348,10 +3456,17 @@ function notConfigured(): string {
     </div>
 
     <!-- Primary button -->
-    <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer" data-action="configure" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">Start setup</button>
+    <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer;margin-bottom:14px" data-action="configure" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">Start setup</button>
+
+    <!-- Env disclosure link -->
+    <div style="text-align:center;margin-bottom:18px">
+      <a href="#" data-action="openEnvDisclosure" style="font-size:10.5px;color:var(--fg-2);text-decoration:none;cursor:pointer">
+        Already have <code style="font-family:var(--font-mono);color:var(--fg-2)">HARNESS_*</code> env vars?
+      </a>
+    </div>
 
     <!-- Footnote card -->
-    <div style="margin-top:18px;padding:10px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);display:flex;gap:8px;align-items:flex-start">
+    <div style="padding:10px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);display:flex;gap:8px;align-items:flex-start">
       <div style="color:var(--accent)">${shieldIcon}</div>
       <div style="font-size:10.5px;color:var(--fg-2);line-height:1.5">Your personal access token is stored in VS Code secret storage — never written to settings.</div>
     </div>
@@ -4012,6 +4127,39 @@ function bind(): void {
       e.preventDefault();
       e.stopPropagation();
       vscode.postMessage({ type: 'AI_CURSOR_CONNECT_OAUTH' });
+    } else if (action === 'openEnvDisclosure') {
+      e.preventDefault();
+      e.stopPropagation();
+      state.envDisclosureOpen = true;
+      scheduleRender(true);
+    } else if (action === 'closeEnvDisclosure') {
+      e.preventDefault();
+      e.stopPropagation();
+      state.envDisclosureOpen = false;
+      scheduleRender(true);
+    } else if (action === 'selectEnvChoice') {
+      e.preventDefault();
+      e.stopPropagation();
+      const choice = (e.target as HTMLElement).closest('[data-choice]')?.getAttribute('data-choice') as 'env' | 'pat';
+      if (choice) {
+        state.envOnboardingChoice = choice;
+        scheduleRender(true);
+      }
+    } else if (action === 'connectWithEnv') {
+      e.preventDefault();
+      e.stopPropagation();
+      vscode.postMessage({ type: 'startEnvVarOnboarding' });
+    } else if (action === 'reloadWindowEnv') {
+      e.preventDefault();
+      e.stopPropagation();
+      vscode.postMessage({ type: 'command', command: 'workbench.action.reloadWindow' });
+    } else if (action === 'copyEnvVars') {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = `export HARNESS_BASE_URL=https://app.harness.io
+export HARNESS_API_KEY=pat.xxxxx
+export HARNESS_ACCOUNT_ID=xxxxx`;
+      navigator.clipboard.writeText(text);
     }
   });
 

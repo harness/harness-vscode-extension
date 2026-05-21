@@ -534,6 +534,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           message: msg,
         });
       }
+    } else if (m.type === 'startEnvVarOnboarding') {
+      // Delegate to the existing command handler
+      vscode.commands.executeCommand('harness.startEnvVarOnboarding');
     }
   });
 
