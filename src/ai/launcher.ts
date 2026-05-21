@@ -19,6 +19,7 @@ interface LaunchOptions {
   toolId: 'claudecode-cli' | 'claudecode-ext' | 'cursor';
   config?: HarnessConfig; // Required for CLI timeout setting
   cwd?: string; // working directory for CLI execution
+  mcpConfigPath?: string;   // NEW — explicit MCP file to load
 }
 
 /**
@@ -28,7 +29,7 @@ export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
   if (options.toolId === 'claudecode-cli') {
     // Get timeout from config (in seconds), convert to milliseconds
     const timeoutMs = options.config ? options.config.claudeCliTimeoutSeconds * 1000 : 90000;
-    return launchCLI(options.prompt, timeoutMs, options.cwd);
+    return launchCLI(options.prompt, timeoutMs, options.cwd, options.mcpConfigPath);
   } else if (options.toolId === 'claudecode-ext') {
     return launchExtension(options.prompt);
   } else if (options.toolId === 'cursor') {
@@ -45,7 +46,7 @@ export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
  * Launch Claude Code CLI subprocess
  * Runs: claude "<prompt>" --output-format json
  */
-async function launchCLI(prompt: string, timeout: number, cwd?: string): Promise<LaunchResult> {
+async function launchCLI(prompt: string, timeout: number, cwd?: string, mcpConfigPath?: string): Promise<LaunchResult> {
   return new Promise((resolve) => {
     const startTime = Date.now();
     let output = '';
@@ -54,16 +55,16 @@ async function launchCLI(prompt: string, timeout: number, cwd?: string): Promise
     // Spawn claude CLI process
     // Use --bare mode to skip all automatic context loading (hooks, LSP, CLAUDE.md, local files)
     // Use --permission-mode bypassPermissions so MCP servers don't require interactive approval
-    // Explicitly load MCP config from ~/.claude.json (bare mode needs this)
+    // Explicitly load MCP config (project or global scope)
     // Run from a temp directory to avoid any directory-based context
     const runDir = os.tmpdir();
-    const claudeConfigPath = `${os.homedir()}/.claude.json`;
+    const claudeConfigPath = mcpConfigPath ?? `${os.homedir()}/.claude.json`;
     const proc = spawn('claude', [
       prompt,
       '--output-format', 'json',
       '--permission-mode', 'bypassPermissions',
       '--bare',  // Skip hooks, LSP, plugin sync, auto-memory, CLAUDE.md discovery
-      '--mcp-config', claudeConfigPath,  // Explicitly load MCP servers from global config
+      '--mcp-config', claudeConfigPath,  // Explicitly load MCP servers from specified path
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout,

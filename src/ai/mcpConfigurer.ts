@@ -4,8 +4,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { getMCPConfigPath } from './detector';
+import { getProjectMCPConfigPath, getGlobalMCPConfigPath, detectMCPScope } from './detector';
 import { logger } from '../utils/logger';
+import { MCPScope } from './types';
 
 interface MCPServerConfig {
   type: string;
@@ -31,43 +32,14 @@ export interface ConfigureOptions {
   accountId?: string;
   orgId?: string;
   projectId?: string;
+  scope: MCPScope;                  // NEW — required
 }
 
 /**
- * Configure Harness MCP server in Claude Desktop config
- * Backs up invalid JSON before writing
- * Merges with existing servers (never overwrites other tools)
+ * Build Harness MCP server config
  */
-export async function configureMCP(options: ConfigureOptions): Promise<void> {
-  const configPath = getMCPConfigPath();
-  // Config is at ~/.claude.json (file in home directory, no subdirectory needed)
-
-  let config: ClaudeDesktopConfig = {};
-
-  // Read existing config if it exists
-  if (fs.existsSync(configPath)) {
-    try {
-      const content = fs.readFileSync(configPath, 'utf-8');
-      config = JSON.parse(content);
-    } catch (error) {
-      // Invalid JSON - back it up
-      const backupPath = `${configPath}.bak`;
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupPathWithTime = `${configPath}.${timestamp}.bak`;
-
-      // Move to timestamped backup
-      fs.copyFileSync(configPath, backupPathWithTime);
-
-      logger.warn('MCP', `Backed up invalid config to ${backupPathWithTime}`);
-
-      // Start fresh
-      config = {};
-    }
-  }
-
-  // Build Harness MCP server config
-  // Note: harness-mcp-v2 expects HARNESS_API_KEY (not HARNESS_PLATFORM_API_KEY)
-  const harnessConfig: MCPServerConfig = {
+function buildHarnessServerConfig(options: ConfigureOptions): MCPServerConfig {
+  return {
     type: 'stdio',
     command: 'npx',
     args: ['harness-mcp-v2'],
@@ -79,6 +51,28 @@ export async function configureMCP(options: ConfigureOptions): Promise<void> {
       ...(options.projectId && { HARNESS_PROJECT_ID: options.projectId }),
     },
   };
+}
+
+/**
+ * Write Harness MCP config to global scope (~/.claude.json)
+ */
+function writeGlobalScope(globalPath: string, harnessConfig: MCPServerConfig): void {
+  let config: ClaudeDesktopConfig = {};
+
+  // Read existing config if it exists
+  if (fs.existsSync(globalPath)) {
+    try {
+      const content = fs.readFileSync(globalPath, 'utf-8');
+      config = JSON.parse(content);
+    } catch (error) {
+      // Invalid JSON - back it up
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPathWithTime = `${globalPath}.${timestamp}.bak`;
+      fs.copyFileSync(globalPath, backupPathWithTime);
+      logger.warn('MCP', `Backed up invalid config to ${backupPathWithTime}`);
+      config = {};
+    }
+  }
 
   // Configure GLOBAL mcpServers (used when not in a project directory)
   if (!config.mcpServers) {
@@ -131,12 +125,12 @@ export async function configureMCP(options: ConfigureOptions): Promise<void> {
 
   // Write config with pretty formatting (preserves other top-level fields)
   const configJson = JSON.stringify(config, null, 2);
-  fs.writeFileSync(configPath, configJson, 'utf-8');
+  fs.writeFileSync(globalPath, configJson, 'utf-8');
 
   if (existingGlobalHarness) {
-    logger.info('MCP', `Updated Harness MCP server configuration at ${configPath}`);
+    logger.info('MCP', `Updated Harness MCP server configuration at ${globalPath}`);
   } else {
-    logger.info('MCP', `Created Harness MCP server configuration at ${configPath}`);
+    logger.info('MCP', `Created Harness MCP server configuration at ${globalPath}`);
   }
   logger.info('MCP', 'IMPORTANT: Restart Claude Code to activate MCP server');
 
@@ -145,41 +139,73 @@ export async function configureMCP(options: ConfigureOptions): Promise<void> {
 }
 
 /**
+ * Write Harness MCP config to project scope (.mcp.json)
+ */
+function writeProjectScope(filePath: string, harness: MCPServerConfig): void {
+  let config: { mcpServers?: Record<string, MCPServerConfig> } = {};
+  if (fs.existsSync(filePath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    } catch {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.copyFileSync(filePath, `${filePath}.${ts}.bak`);
+      logger.warn('MCP', `Backed up invalid .mcp.json`);
+      config = {};
+    }
+  }
+
+  if (!config.mcpServers) config.mcpServers = {};
+  const existing = config.mcpServers.harness;
+  config.mcpServers.harness = {
+    ...harness,
+    command: existing?.command || harness.command,
+    args: existing?.args || harness.args,
+    env: { ...(existing?.env || {}), ...harness.env },
+  };
+
+  fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf-8');
+  logger.info('MCP', existing ? `Updated Harness MCP at ${filePath}` : `Created Harness MCP at ${filePath}`);
+}
+
+/**
+ * Configure Harness MCP server in the chosen scope
+ * Backs up invalid JSON before writing
+ * Merges with existing servers (never overwrites other tools)
+ */
+export async function configureMCP(options: ConfigureOptions): Promise<{ scope: MCPScope; path: string }> {
+  const harnessConfig: MCPServerConfig = buildHarnessServerConfig(options);
+
+  if (options.scope === 'project') {
+    const projectPath = getProjectMCPConfigPath();
+    if (!projectPath) {
+      throw new Error('No workspace folder is open. Open a folder before choosing project scope.');
+    }
+    writeProjectScope(projectPath, harnessConfig);
+    return { scope: 'project', path: projectPath };
+  }
+
+  const globalPath = getGlobalMCPConfigPath();
+  writeGlobalScope(globalPath, harnessConfig);
+  return { scope: 'global', path: globalPath };
+}
+
+/**
  * Check if Harness MCP is already configured
  */
-export function isMCPConfigured(): boolean {
-  const configPath = getMCPConfigPath();
-
-  if (!fs.existsSync(configPath)) {
-    return false;
-  }
-
-  try {
-    const content = fs.readFileSync(configPath, 'utf-8');
-    const config: ClaudeDesktopConfig = JSON.parse(content);
-
-    const harnessServer = config?.mcpServers?.harness;
-    if (!harnessServer) {
-      return false;
-    }
-
-    // Verify it has required fields
-    const hasCommand = typeof harnessServer.command === 'string';
-    const hasApiKey = harnessServer.env?.HARNESS_API_KEY || harnessServer.env?.HARNESS_PLATFORM_API_KEY; // Support both for backwards compat
-
-    return hasCommand && !!hasApiKey;
-  } catch {
-    return false;
-  }
+export function isMCPConfigured(scope?: MCPScope): boolean {
+  const s = detectMCPScope();
+  if (!scope) return s.activeScope !== null;
+  if (scope === 'project') return !!s.project?.configured;
+  return s.global.configured;
 }
 
 /**
  * Remove Harness MCP server from config (cleanup/uninstall)
  */
-export async function removeMCPConfig(): Promise<void> {
-  const configPath = getMCPConfigPath();
+export async function removeMCPConfig(scope: MCPScope): Promise<void> {
+  const configPath = scope === 'project' ? getProjectMCPConfigPath() : getGlobalMCPConfigPath();
 
-  if (!fs.existsSync(configPath)) {
+  if (!configPath || !fs.existsSync(configPath)) {
     return;
   }
 
@@ -194,7 +220,7 @@ export async function removeMCPConfig(): Promise<void> {
       const configJson = JSON.stringify(config, null, 2);
       fs.writeFileSync(configPath, configJson, 'utf-8');
 
-      logger.info('MCP', 'Removed Harness MCP server from config');
+      logger.info('MCP', `Removed Harness MCP server from ${scope} config`);
     }
   } catch (error) {
     logger.error('MCP', 'Failed to remove config:', error);

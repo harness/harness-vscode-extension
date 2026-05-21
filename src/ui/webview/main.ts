@@ -331,12 +331,14 @@ const state = {
   menuOpen: false,
 
   // AI integration state
-  aiDetection: null as { tools: Array<{ id: string; name: string; sub: string | null; mcpReady: boolean }>; activeTool: string | null; mcpConfigPath: string | null } | null,
+  aiDetection: null as { tools: Array<{ id: string; name: string; sub: string | null; mcpReady: boolean }>; activeTool: string | null; mcpConfigPath: string | null; mcpScope: { project: { path: string; configured: boolean } | null; global: { path: string; configured: boolean }; activeScope: 'project' | 'global' | null; conflict: boolean } } | null,
   aiState: 'detecting' as 'detecting' | 'none' | 'unconfigured' | 'ready' | 'sending' | 'error',
   aiQuestion: '',
   aiShowToolPicker: false,
-  aiOverlay: null as 'mcp-setup' | 'mcp-done' | 'response' | 'launched' | null,
+  aiOverlay: null as 'mcp-setup' | 'mcp-existing' | 'mcp-conflict' | 'mcp-done' | 'response' | 'launched' | null,
   aiMcpConfiguring: false,
+  aiMcpSetupScope: 'project' as 'project' | 'global',          // NEW — which radio is selected
+  aiMcpDoneScope: null as 'project' | 'global' | null,         // NEW — which scope was just written (for the toast)
   aiResponse: null as { content: string; toolCalls?: Array<{ name: string }>; durationMs?: number } | null,
   aiError: null as string | null,
 };
@@ -931,6 +933,7 @@ window.addEventListener('message', ({ data: msg }) => {
       state.aiState = 'ready';
       state.aiOverlay = 'mcp-done';
       state.aiMcpConfiguring = false;
+      state.aiMcpDoneScope = (msg as any).scope || null;
       scheduleRender(true); // Force immediate render
       return; // Skip the scheduleRender at the end
 
@@ -1625,6 +1628,18 @@ function externalIcon(): string {
   return `<svg width="11" height="11" viewBox="0 0 12 12"><path d="M3 3 L7 3 L7 7 M7 3 L3 7" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
+function folderIcon(): string {
+  return `<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 4 L1.5 11 Q1.5 11.8 2.3 11.8 L11.7 11.8 Q12.5 11.8 12.5 11 L12.5 5.5 Q12.5 4.7 11.7 4.7 L6.8 4.7 L5.6 3.3 Q5.2 2.8 4.5 2.8 L2.3 2.8 Q1.5 2.8 1.5 3.6 Z" stroke="currentColor" stroke-width="1.1" fill="none" stroke-linejoin="round"/></svg>`;
+}
+
+function homeIcon(): string {
+  return `<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.8 6.5 L7 2 L12.2 6.5 L12.2 11.5 Q12.2 12 11.7 12 L8.8 12 L8.8 8.8 L5.2 8.8 L5.2 12 L2.3 12 Q1.8 12 1.8 11.5 Z" stroke="currentColor" stroke-width="1.1" fill="none" stroke-linejoin="round"/></svg>`;
+}
+
+function infoIcon(): string {
+  return `<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M6 5.4 L6 8.2 M6 3.8 L6 4.0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`;
+}
+
 function statusDot(dotState: 'ok' | 'warn' | 'err' | 'pulse'): string {
   return `<span class="ai-dot ai-dot-${dotState}" aria-hidden="true"></span>`;
 }
@@ -1668,7 +1683,7 @@ function renderAIToolPicker(): string {
 }
 
 function renderAIMCPCard(): string {
-  if (state.aiOverlay !== 'mcp-setup' && state.aiOverlay !== 'mcp-done') return '';
+  if (state.aiOverlay !== 'mcp-setup' && state.aiOverlay !== 'mcp-done' && state.aiOverlay !== 'mcp-existing' && state.aiOverlay !== 'mcp-conflict') return '';
   const activeTool = state.aiDetection?.activeTool;
   if (!activeTool) return '';
 
@@ -1679,12 +1694,37 @@ function renderAIMCPCard(): string {
 
   const meta = AI_TOOL_META[activeTool];
   const glyph = getAIToolGlyph(activeTool);
-  if (state.aiOverlay === 'mcp-done') {
-    return `<div class="aix-overlay aix-overlay-done"><span class="aix-overlay-check">${checkIcon()}</span><div class="aix-overlay-done-text"><strong>Harness MCP configured for ${esc(meta.name)}.</strong><span>Restart ${esc(meta.name)} to activate.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div>`;
+
+  // Existing config card
+  if (state.aiOverlay === 'mcp-existing') {
+    const scope = state.aiDetection?.mcpScope;
+    if (!scope || !scope.activeScope) return '';
+    const scopeInfo = scope.activeScope === 'project' ? scope.project : scope.global;
+    if (!scopeInfo) return '';
+    return `<div class="aix-overlay aix-overlay-existing"><div class="aix-existing-hdr"><span class="aix-existing-check">${checkIcon()}</span><div class="aix-existing-title"><strong>Harness MCP is already configured</strong><span>You're all set to use ${esc(meta.name)} with Harness.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-existing-where"><span class="aix-scope-chip is-${scope.activeScope}"><span class="aix-scope-chip-ico">${scope.activeScope === 'project' ? folderIcon() : homeIcon()}</span>${scope.activeScope}</span><code class="aix-existing-path">${esc(scopeInfo.path)}</code><button type="button" class="aix-existing-open" data-action="openMCPConfig" data-scope="${scope.activeScope}">Open</button></div><div class="aix-setup-acts"><button type="button" class="aix-btn-ghost" data-action="closeAIMCPCard">Got it</button></div></div>`;
   }
+
+  // Conflict card
+  if (state.aiOverlay === 'mcp-conflict') {
+    const scope = state.aiDetection?.mcpScope;
+    if (!scope || !scope.conflict) return '';
+    return `<div class="aix-overlay aix-overlay-conflict"><div class="aix-existing-hdr"><span class="aix-existing-warn">${warnIcon()}</span><div class="aix-existing-title"><strong>Harness MCP configured in both scopes</strong><span>Project scope takes precedence. Global config is ignored.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-conflict-list"><div class="aix-conflict-row is-active"><span class="aix-scope-chip is-project"><span class="aix-scope-chip-ico">${folderIcon()}</span>project</span><code class="aix-existing-path">${esc(scope.project!.path)}</code><span class="aix-conflict-tag is-active">in use</span><button type="button" class="aix-conflict-open" data-action="openMCPConfig" data-scope="project">Open</button></div><div class="aix-conflict-row is-shadowed"><span class="aix-scope-chip is-global"><span class="aix-scope-chip-ico">${homeIcon()}</span>global</span><code class="aix-existing-path">${esc(scope.global.path)}</code><span class="aix-conflict-tag">ignored</span><button type="button" class="aix-conflict-open" data-action="openMCPConfig" data-scope="global">Open</button></div></div><div class="aix-conflict-foot"><span>${infoIcon()} To switch scopes, remove one config and run setup again.</span><button type="button" class="aix-btn-ghost is-small" data-action="closeAIMCPCard">Got it</button></div></div>`;
+  }
+
+  // Done toast
+  if (state.aiOverlay === 'mcp-done') {
+    const doneScope = state.aiMcpDoneScope || 'global';
+    const pathDisplay = doneScope === 'project' ? '<workspace>/.mcp.json' : '~/.claude.json';
+    return `<div class="aix-overlay aix-overlay-done"><span class="aix-overlay-check">${checkIcon()}</span><div class="aix-overlay-done-text"><strong>Harness MCP configured for ${esc(meta.name)}.</strong><span>Wrote <code class="mono">${esc(pathDisplay)}</code> · restart ${esc(meta.name)} to activate.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div>`;
+  }
+
+  // Setup card with scope picker
   const busyClass = state.aiMcpConfiguring ? 'is-busy' : '';
-  const busyContent = state.aiMcpConfiguring ? `<span class="aix-send-spin"></span> Configuring…` : 'Configure automatically';
-  return `<div class="aix-overlay aix-overlay-setup"><div class="aix-setup-hdr"><span class="aix-setup-glyph">${glyph}</span><div class="aix-setup-title"><strong>Configure Harness MCP</strong><span>Lets ${esc(meta.name)} fetch pipeline data, logs &amp; executions.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-setup-meta"><div class="aix-setup-row"><span class="aix-setup-k">Writes to</span><code class="aix-setup-v mono">~/.claude.json</code></div><div class="aix-setup-row"><span class="aix-setup-k">Auth</span><span class="aix-setup-v">Uses your stored Harness PAT</span></div></div><div class="aix-setup-acts"><button type="button" class="aix-btn-primary ${busyClass}" data-action="configureAIMCP" ${state.aiMcpConfiguring ? 'disabled' : ''}>${busyContent}</button><button type="button" class="aix-btn-ghost" data-action="closeAIMCPCard">Not now</button></div></div>`;
+  const busyContent = state.aiMcpConfiguring ? `<span class="aix-send-spin"></span> Configuring…` : (state.aiMcpSetupScope === 'project' ? 'Configure for this project' : 'Configure globally');
+  const writesTo = state.aiMcpSetupScope === 'project' ? '<workspace>/.mcp.json' : '~/.claude.json';
+  const tipText = state.aiMcpSetupScope === 'project' ? 'Lives in your workspace root.' : 'Lives in your home folder. Only you use it; applies to every project you open.';
+
+  return `<div class="aix-overlay aix-overlay-setup"><div class="aix-setup-hdr"><span class="aix-setup-glyph">${glyph}</span><div class="aix-setup-title"><strong>Configure Harness MCP</strong><span>Lets ${esc(meta.name)} fetch pipeline data, logs &amp; executions.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-scope-label-row"><span class="aix-setup-k">Where</span></div><div class="aix-scope"><button type="button" class="aix-scope-opt ${state.aiMcpSetupScope === 'project' ? 'on' : ''}" data-action="setMCPScope" data-scope="project"><span class="aix-scope-ico">${folderIcon()}</span><span class="aix-scope-text"><strong>This project</strong><span>shared with teammates if committed</span></span><span class="aix-scope-radio" aria-hidden></span></button><button type="button" class="aix-scope-opt ${state.aiMcpSetupScope === 'global' ? 'on' : ''}" data-action="setMCPScope" data-scope="global"><span class="aix-scope-ico">${homeIcon()}</span><span class="aix-scope-text"><strong>All my projects</strong><span>personal, every repo</span></span><span class="aix-scope-radio" aria-hidden></span></button></div><div class="aix-setup-meta"><div class="aix-setup-row"><span class="aix-setup-k">Writes to</span><code class="aix-setup-v mono">${esc(writesTo)}</code></div><div class="aix-setup-row"><span class="aix-setup-k">Auth</span><span class="aix-setup-v">Uses your stored Harness PAT</span></div></div><div class="aix-scope-tip"><span class="aix-scope-tip-ico">${infoIcon()}</span><span>${esc(tipText)}</span></div><div class="aix-setup-acts"><button type="button" class="aix-btn-primary ${busyClass}" data-action="configureAIMCP" ${state.aiMcpConfiguring ? 'disabled' : ''}>${busyContent}</button><button type="button" class="aix-btn-ghost" data-action="closeAIMCPCard">Not now</button></div></div>`;
 }
 
 function renderAIResponse(): string {
@@ -1848,7 +1888,8 @@ function aiFooter(): string {
     const s = statusLines[effectiveState];
     const linkAction = effectiveState === 'cursor-no-plugin' ? 'cursorInstallPlugin' : effectiveState === 'cursor-oauth-pending' ? 'cursorConnectOAuth' : effectiveState === 'unconfigured' ? 'showAIMCPSetup' : 'retryAI';
     const linkHtml = s.link ? `<button type="button" class="aix-status-link ${effectiveState === 'unconfigured' || effectiveState === 'cursor-no-plugin' || effectiveState === 'cursor-oauth-pending' ? 'is-primary' : ''}" data-action="${linkAction}">${esc(s.link)}</button>` : '';
-    statusHtml = `<div class="aix-status">${statusDot(s.dot as any)}<span class="aix-status-txt">${esc(s.text)}</span>${linkHtml}</div>`;
+    const scopeChip = (effectiveState === 'ready' && detection?.mcpScope?.activeScope) ? `<span class="aix-scope-tag is-${detection.mcpScope.activeScope}">${detection.mcpScope.activeScope === 'project' ? folderIcon() : homeIcon()}${detection.mcpScope.activeScope}</span>` : '';
+    statusHtml = `<div class="aix-status">${statusDot(s.dot as any)}<span class="aix-status-txt">${esc(s.text)}</span>${scopeChip}${linkHtml}</div>`;
   }
   return `<div class="aix aix-${effectiveState}">${renderAIToolPicker()}${renderAIMCPCard()}${renderAIResponse()}${renderAILaunched()}<div class="aix-bar">${badgeHtml}<input class="aix-inp" placeholder="${esc(placeholders[effectiveState])}" value="${esc(question)}" ${inputDisabled ? 'disabled' : ''} data-action="aiInput"/><button type="button" class="aix-send" ${sendDisabled ? 'disabled' : ''} data-action="sendAI">${sendContent}</button></div>${statusHtml}</div>`;
 }
@@ -3912,12 +3953,27 @@ function bind(): void {
       e.stopPropagation();
       state.aiOverlay = null;
       scheduleRender(true);
+    } else if (action === 'setMCPScope') {
+      e.preventDefault();
+      e.stopPropagation();
+      const scope = (e.target as HTMLElement).closest('[data-scope]')?.getAttribute('data-scope') as 'project' | 'global';
+      if (scope) {
+        state.aiMcpSetupScope = scope;
+        scheduleRender(true);
+      }
     } else if (action === 'configureAIMCP') {
       e.preventDefault();
       e.stopPropagation();
       state.aiMcpConfiguring = true;
       scheduleRender(true);
-      vscode.postMessage({ type: 'AI_CONFIGURE_MCP' });
+      vscode.postMessage({ type: 'AI_CONFIGURE_MCP', scope: state.aiMcpSetupScope });
+    } else if (action === 'openMCPConfig') {
+      e.preventDefault();
+      e.stopPropagation();
+      const scope = (e.target as HTMLElement).closest('[data-scope]')?.getAttribute('data-scope') as 'project' | 'global';
+      if (scope) {
+        vscode.postMessage({ type: 'AI_OPEN_MCP_CONFIG', scope });
+      }
     } else if (action === 'closeAIOverlay') {
       e.preventDefault();
       e.stopPropagation();

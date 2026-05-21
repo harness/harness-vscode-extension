@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
 import { logger } from '../utils/logger';
+import { MCPScope, MCPDetectionState } from './types';
 
 export interface DetectedTool {
   id: 'claudecode-cli' | 'claudecode-ext' | 'cursor';
@@ -22,6 +23,7 @@ export interface DetectionResult {
   tools: DetectedTool[];
   activeTool: string | null; // ID of the highest-priority tool
   mcpConfigPath: string | null;
+  mcpScope: MCPDetectionState;    // NEW — full scope state for the webview
 }
 
 /**
@@ -94,44 +96,65 @@ async function detectClaudeExtension(): Promise<DetectedTool | null> {
   }
 }
 
+/** Absolute path to the project-level MCP file, or null if no workspace is open. */
+export function getProjectMCPConfigPath(): string | null {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return null;
+  return path.join(folder.uri.fsPath, '.mcp.json');
+}
+
+/** Absolute path to the global config file. Same value getMCPConfigPath() returns today. */
+export function getGlobalMCPConfigPath(): string {
+  return path.join(os.homedir(), '.claude.json');
+}
+
+/**
+ * Read Harness MCP config from a specific file
+ */
+function readHarnessFromFile(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const harness = config?.mcpServers?.harness;
+    if (!harness) return false;
+    const hasCommand = typeof harness.command === 'string' && harness.command.length > 0;
+    const hasEnv = harness.env && typeof harness.env === 'object';
+    return hasCommand && hasEnv;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect MCP scope state (project, global, both)
+ */
+export function detectMCPScope(): MCPDetectionState {
+  const projectPath = getProjectMCPConfigPath();
+  const globalPath = getGlobalMCPConfigPath();
+
+  const projectConfigured = projectPath ? readHarnessFromFile(projectPath) : false;
+  const globalConfigured = readHarnessFromFile(globalPath);
+
+  let activeScope: MCPScope | null = null;
+  if (projectConfigured) activeScope = 'project';        // project wins
+  else if (globalConfigured) activeScope = 'global';
+
+  return {
+    project: projectPath ? { scope: 'project', path: projectPath, configured: projectConfigured } : null,
+    global: { scope: 'global', path: globalPath, configured: globalConfigured },
+    activeScope,
+    conflict: projectConfigured && globalConfigured,
+  };
+}
+
 /**
  * Check if Harness MCP server is configured in Claude Desktop config
  */
 async function checkMCPReady(): Promise<boolean> {
-  const configPath = getClaudeConfigPath();
-
-  if (!configPath || !fs.existsSync(configPath)) {
-    return false;
-  }
-
-  try {
-    const configContent = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(configContent);
-
-    // Check if mcpServers.harness exists and has required fields
-    const harnessServer = config?.mcpServers?.harness;
-    if (!harnessServer) {
-      return false;
-    }
-
-    // Verify it has command and env (at minimum)
-    const hasCommand = typeof harnessServer.command === 'string' && harnessServer.command.length > 0;
-    const hasEnv = harnessServer.env && typeof harnessServer.env === 'object';
-
-    return hasCommand && hasEnv;
-  } catch (error) {
-    // Invalid JSON or read error
-    return false;
-  }
+  const s = detectMCPScope();
+  return s.activeScope !== null;
 }
 
-/**
- * Get Claude Code config path
- * Returns ~/.claude.json on all platforms
- */
-function getClaudeConfigPath(): string {
-  return path.join(os.homedir(), '.claude.json');
-}
 
 /**
  * Check if Harness MCP entry exists in Cursor mcp.json
@@ -365,17 +388,25 @@ export async function detectAITools(preferredToolId?: string): Promise<Detection
     activeTool = tools.length > 0 ? tools[0].id : null;
   }
 
+  // Populate scope state
+  const scope = detectMCPScope();
+  const mcpConfigPath = scope.activeScope === 'project' && scope.project
+    ? scope.project.path
+    : scope.global.path;
+
   return {
     tools,
     activeTool,
-    mcpConfigPath: tools.length > 0 ? getClaudeConfigPath() : null,
+    mcpConfigPath: tools.length > 0 ? mcpConfigPath : null,
+    mcpScope: scope,
   };
 }
 
 /**
  * Get the MCP config path for Claude Code
  * Used by MCP configurer to write settings
+ * @deprecated Use getGlobalMCPConfigPath() instead
  */
 export function getMCPConfigPath(): string {
-  return getClaudeConfigPath();
+  return getGlobalMCPConfigPath();
 }

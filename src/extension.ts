@@ -350,11 +350,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // Launch AI tool
         // Pass workspace folder so CLI uses project-specific MCP config
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const mcpConfigPath = detection.mcpScope.activeScope === 'project' && detection.mcpScope.project
+          ? detection.mcpScope.project.path
+          : detection.mcpScope.global.path;
         const result = await launchAI({
           prompt,
           toolId: detection.activeTool as any,
           config: currentConfig || undefined,
           cwd: workspaceFolder,
+          mcpConfigPath,
         });
 
         if (result.type === 'response') {
@@ -385,7 +389,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     } else if (m.type === 'AI_CONFIGURE_MCP') {
       // Configure Harness MCP server
-      logger.info('AI', 'Configuring MCP...');
+      const aiMsg = m as { type: 'AI_CONFIGURE_MCP'; scope?: 'project' | 'global' };
+      const scope: 'project' | 'global' = aiMsg.scope ?? 'project';   // default to project
+
+      logger.info('AI', `Configuring MCP (${scope} scope)...`);
 
       // Cursor uses the Harness Plugin — never show the MCP configure panel for Cursor
       const detection = await detectAITools(getAIToolPreference());
@@ -413,22 +420,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           return;
         }
 
-        await configureMCP({
+        const result = await configureMCP({
           apiKey,
           baseUrl: currentConfig.baseUrl,
           accountId: currentConfig.accountIdentifier,
           orgId: currentConfig.orgIdentifier,
           projectId: currentConfig.projectIdentifier,
+          scope,                                          // NEW
         });
 
         // Get active tool to send back in confirmation
-        const detection = await detectAITools(getAIToolPreference());
-        const activeTool = detection.activeTool || 'claudecode-cli';
+        const updatedDetection = await detectAITools(getAIToolPreference());
+        const activeTool = updatedDetection.activeTool || 'claudecode-cli';
 
-        logger.info('AI', 'MCP configured successfully');
+        logger.info('AI', `MCP configured successfully at ${result.path}`);
         bridge.send({
           type: 'AI_CONFIG_DONE',
           tool: activeTool,
+          scope: result.scope,                            // NEW — webview shows path in toast
+          path: result.path,                              // NEW
         });
 
         // Re-detect to update MCP readiness state
@@ -447,6 +457,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           message: `Failed to configure MCP: ${msg}`,
         });
       }
+    } else if (m.type === 'AI_OPEN_MCP_CONFIG') {
+      const aiMsg = m as { type: 'AI_OPEN_MCP_CONFIG'; scope: 'project' | 'global' };
+      const { detectMCPScope } = await import('./ai/detector');
+      const detection = detectMCPScope();
+      const target = aiMsg.scope === 'project' ? detection.project : detection.global;
+      if (!target) return;
+      const uri = vscode.Uri.file(target.path);
+      await vscode.commands.executeCommand('vscode.open', uri);
     } else if (m.type === 'AI_SWITCH_TOOL') {
       // Switch active AI tool
       const aiMsg = m as any;
@@ -824,9 +842,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }).catch(err => {
     logger.error('AI', 'Detection failed:', err);
     // Send empty detection result on error
+    const { detectMCPScope } = require('./ai/detector');
+    const scope = detectMCPScope();
     bridge.send({
       type: 'STATE_UPDATE',
-      aiDetection: { tools: [], activeTool: null, mcpConfigPath: null },
+      aiDetection: { tools: [], activeTool: null, mcpConfigPath: null, mcpScope: scope },
     });
   });
 }
