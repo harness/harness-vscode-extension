@@ -49,8 +49,8 @@
         "title": "Harness: Configure API Key"
       },
       {
-        "command": "harness.clearApiKey",
-        "title": "Harness: Clear API Key"
+        "command": "harness.resetConfiguration",
+        "title": "Harness: Reset Auth Configuration"
       },
       {
         "command": "harness.selectProject",
@@ -119,6 +119,19 @@
           "type": "string",
           "default": "",
           "description": "Harness account ID (Account Settings → Overview)."
+        },
+        "harness.authSource": {
+          "type": "string",
+          "enum": [
+            "pat",
+            "env"
+          ],
+          "enumDescriptions": [
+            "Personal Access Token stored in secret storage",
+            "Environment variables (HARNESS_API_KEY, HARNESS_BASE_URL, HARNESS_ACCOUNT_ID)"
+          ],
+          "default": "pat",
+          "description": "Authentication method. Set automatically during onboarding."
         },
         "harness.orgIdentifier": {
           "type": "string",

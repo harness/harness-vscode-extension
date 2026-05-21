@@ -267,6 +267,7 @@ const TERMINAL_STATUSES_SET = new Set([
 ]);
 
 const state = {
+  initializing:  true, // true until we receive envDetection message
   gitCtx:        null as GitCtx | null,
   org:           '' as string,
   project:       '' as string,
@@ -346,6 +347,7 @@ const state = {
   envDetection: null as { allPresent: boolean; baseUrl: string | null; apiKey: string | null; accountId: string | null } | null,
   envDisclosureOpen: false as boolean, // false → Panel D, true → Panel E
   envOnboardingChoice: 'env' as 'env' | 'pat', // which choice card is selected in Panel A
+  authSource: 'pat' as 'pat' | 'env', // from settings - determines if we wait for env vars
 };
 
 // ── Dynamic page size calculation ──────────────────────────────────────────
@@ -422,19 +424,27 @@ window.addEventListener('message', ({ data: msg }) => {
   switch (msg.type) {
 
     case 'GIT_CONTEXT':
+      console.log('[Webview] GIT_CONTEXT received:', { org: msg.org, project: msg.project, currentOrg: state.org, currentProject: state.project });
       state.gitCtx = msg.ctx;
       state.shaMismatch = null;
       // GIT_CONTEXT means we have config (org/project) - mark as configured
       state.configured = true;
+      // Update authSource from settings if provided
+      if (msg.authSource) {
+        state.authSource = msg.authSource as 'pat' | 'env';
+      }
       // Only consider it "changed" if we had a previous value AND it differs
       // (Don't treat initial set as a change)
       const orgChanged = state.org && msg.org && msg.org !== state.org;
       const projectChanged = state.project && msg.project && msg.project !== state.project;
+      const wasEmptyOrgProject = !state.org || !state.project;
       if (msg.org)     state.org     = msg.org;
       if (msg.project) state.project = msg.project;
 
       // Initialize pinned view and default view mode from settings (only once on first load)
-      if (!state.viewModeInitialized) {
+      // OR if we just got org/project for the first time (env var onboarding)
+      if (!state.viewModeInitialized || wasEmptyOrgProject) {
+        console.log('[Webview] Initializing view mode:', { wasEmptyOrgProject, viewModeInitialized: state.viewModeInitialized });
         // Handle both old ('thisCommit'/'allExecutions') and new ('pipelines'/'executions') setting values
         const defaultView = msg.defaultView ?? 'pipelines';
         const normalizedView =
@@ -447,6 +457,7 @@ window.addEventListener('message', ({ data: msg }) => {
         state.viewModeInitialized = true;
 
         // Fetch data for initial view
+        console.log('[Webview] Fetching data for view:', state.viewMode);
         if (state.viewMode === 'executions') {
           state.loadingExecution = true;
           vscode.postMessage({ type: 'fetchHistory', page: 0, filter: state.historyFilter, pageSize: state.historyPageSize, pipelineId: state.filteredPipelineId });
@@ -488,33 +499,37 @@ window.addEventListener('message', ({ data: msg }) => {
         state.aiChatEnabled = msg.aiChatEnabled;
         console.log('[Webview] AI chat enabled:', state.aiChatEnabled);
       }
+
+      // If org/project changed, clear state and refetch data
+      if (orgChanged || projectChanged) {
+        console.log('[Webview] Org/project changed, refetching data');
+        state.historyPage = 0;
+        state.historyList = [];
+        state.historyTotal = 0;
+        state.detailExecId = null;
+        state.executions.clear();
+        state.pipelineList = [];
+
+        // Fetch fresh data for current view
+        if (state.viewMode === 'executions') {
+          state.loadingExecution = true;
+          vscode.postMessage({ type: 'fetchHistory', page: 0, filter: state.historyFilter, pageSize: state.historyPageSize, pipelineId: state.filteredPipelineId });
+        } else if (state.viewMode === 'pipelines') {
+          state.loadingPipelines = true;
+          vscode.postMessage({ type: 'fetchPipelines' });
+        }
+      }
       break;
 
     case 'envDetection':
       state.envDetection = msg.envDetection;
-      console.log('[Webview] envDetection received:', state.envDetection);
+      if (msg.authSource) {
+        state.authSource = msg.authSource as 'pat' | 'env';
+      }
+      state.initializing = false; // Mark initialization complete
+      console.log('[Webview] envDetection received:', { envDetection: state.envDetection, authSource: state.authSource });
       scheduleRender(true);
       applyEffectiveTheme();
-
-      // If org/project changed, reset history/detail state
-      if (orgChanged || projectChanged) {
-        state.historyPage = 0;
-        state.historyList = [];
-        state.historyTotal = 0;
-        state.executions.clear();
-
-        // If viewing detail, go back to history list
-        if (state.viewMode === 'detail') {
-          state.viewMode = 'executions';
-          state.detailExecId = null;
-        }
-
-        // If on history tab, fetch immediately
-        if (state.viewMode === 'executions') {
-          state.loadingExecution = true; // Show loading state while fetching
-          vscode.postMessage({ type: 'fetchHistory', page: 0, filter: state.historyFilter, pageSize: state.historyPageSize, pipelineId: state.filteredPipelineId });
-        }
-      }
       break;
 
     case 'EXECUTION_UPDATE': {
@@ -907,18 +922,47 @@ window.addEventListener('message', ({ data: msg }) => {
       break;
 
     case 'STATE_UPDATE':
-      state.aiDetection = msg.aiDetection;
-      // Determine AI state from detection result
-      if (!msg.aiDetection) {
-        state.aiState = 'detecting';
-      } else if (msg.aiDetection.tools.length === 0) {
-        state.aiState = 'none';
-      } else if (!msg.aiDetection.tools.some(t => t.mcpReady)) {
-        state.aiState = 'unconfigured';
-      } else {
-        state.aiState = 'ready';
+      console.log('[Webview] STATE_UPDATE received:', msg);
+      // Handle configured state update
+      if (msg.configured !== undefined) {
+        const wasConfigured = state.configured;
+        state.configured = msg.configured;
+        console.log('[Webview] Configured state:', { wasConfigured, nowConfigured: state.configured });
+
+        // If we just became configured, initialize the view and fetch data
+        if (!wasConfigured && msg.configured) {
+          console.log('[Webview] Just became configured - initializing view');
+          // Initialize view mode if not done yet
+          if (!state.viewModeInitialized) {
+            state.pinnedView = 'pipelines';
+            state.viewMode = 'pipelines';
+            state.viewModeInitialized = true;
+          }
+          // Fetch data for current view
+          if (state.viewMode === 'executions') {
+            state.loadingExecution = true;
+            vscode.postMessage({ type: 'fetchHistory', page: 0, filter: state.historyFilter, pageSize: state.historyPageSize, pipelineId: state.filteredPipelineId });
+          } else if (state.viewMode === 'pipelines') {
+            state.loadingPipelines = true;
+            vscode.postMessage({ type: 'fetchPipelines' });
+          }
+        }
       }
-      scheduleRender(true); // Force immediate render for AI state changes
+      // Handle AI detection state update
+      if (msg.aiDetection !== undefined) {
+        state.aiDetection = msg.aiDetection;
+        // Determine AI state from detection result
+        if (!msg.aiDetection) {
+          state.aiState = 'detecting';
+        } else if (msg.aiDetection.tools.length === 0) {
+          state.aiState = 'none';
+        } else if (!msg.aiDetection.tools.some(t => t.mcpReady)) {
+          state.aiState = 'unconfigured';
+        } else {
+          state.aiState = 'ready';
+        }
+      }
+      scheduleRender(true); // Force immediate render for state changes
       return; // Skip the scheduleRender at the end
 
     case 'AI_RESPONSE':
@@ -1394,7 +1438,26 @@ function render(): void {
 }
 
 function build(): string {
-  if (!state.configured) return notConfigured();
+  // Show loading spinner during initialization
+  if (state.initializing) {
+    return `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;color:var(--fg-2);font-size:11px">
+      <span class="spinner" style="font-size:20px">⟳</span>
+      <span>Loading...</span>
+    </div>`;
+  }
+
+  // Show onboarding if not configured OR if we don't have org/project yet
+  // BUT: if authSource='env', don't flash onboarding screen while waiting for config
+  if (!state.configured || !state.org || !state.project) {
+    // If using env vars and we're just waiting for config, show loading instead
+    if (state.authSource === 'env' && state.envDetection?.allPresent) {
+      return `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;color:var(--fg-2);font-size:11px">
+        <span class="spinner" style="font-size:20px">⟳</span>
+        <span>Loading Harness workspace...</span>
+      </div>`;
+    }
+    return notConfigured();
+  }
 
   const parts: string[] = [];
 
@@ -3326,9 +3389,18 @@ function renderPanelA(): string {
   const buttonAction = isEnv ? 'connectWithEnv' : 'configure';
 
   return `<div class="onboarding-empty">
-    <!-- Title -->
-    <div style="font-size:13px;font-weight:600;color:var(--fg-0);margin-bottom:3px">Connect to Harness</div>
-    <div style="font-size:11px;color:var(--fg-2);margin-bottom:14px">How would you like to sign in?</div>
+    <!-- Title row with logo tile -->
+    <div style="display:flex;gap:10px;margin-bottom:14px;align-items:flex-start">
+      <div style="width:38px;height:38px;border-radius:10px;background:var(--accent-soft);border:1px solid var(--accent-ring);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg width="22" height="22" viewBox="0 0 124 124" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M103.948 42.1496L75.6373 13.6339C72.2845 10.4453 68.291 8.01733 63.9263 6.51369C54.2541 3.27405 44.6282 5.80282 36.8325 13.6339L8.45273 42.1496C5.28327 45.5226 2.86981 49.5401 1.37519 53.9313C-1.85662 63.662 0.657009 73.3457 8.45273 81.1768L36.7977 109.693C40.1449 112.882 44.135 115.311 48.4971 116.813C51.1397 117.712 53.9086 118.176 56.6981 118.188C63.4976 118.188 70.0076 115.298 75.5909 109.693L103.924 81.1768C107.098 77.8053 109.515 73.7875 111.013 69.3954C114.234 59.6647 111.72 49.9926 103.924 42.1496H103.948ZM58.3777 21.9078C60.5191 22.5984 62.4922 23.734 64.1695 25.2407L72.5443 33.6777L56.2117 50.0972L39.8788 33.6661L48.3 25.1824C50.5588 22.9217 53.7442 20.5211 58.4009 21.8961L58.3777 21.9078ZM16.7002 59.4551C17.3889 57.2992 18.5217 55.314 20.0247 53.6284L28.3996 45.203L44.7323 61.6342L28.388 78.0654L19.9668 69.5818C17.708 67.321 15.3334 64.1163 16.6886 59.4317L16.7002 59.4551ZM54.0225 101.384C51.8784 100.699 49.9039 99.5633 48.2307 98.051L39.8788 89.719L56.2117 73.2759L72.5443 89.7071L64.1231 98.191C61.8643 100.452 58.6905 102.852 54.0225 101.477V101.384ZM95.7231 63.9183C95.0346 66.0715 93.9061 68.0565 92.4102 69.745L84.0353 78.0654L67.7024 61.6342L84.0353 45.203L92.4565 53.675C94.7153 55.9356 97.09 59.1403 95.7347 63.8249" fill="#00ADE4"/>
+        </svg>
+      </div>
+      <div style="display:flex;flex-direction:column">
+        <div style="font-size:13px;font-weight:600;color:var(--fg-0);line-height:1.3">Connect to Harness</div>
+        <div style="font-size:11px;color:var(--fg-2);line-height:1.3">How would you like to sign in?</div>
+      </div>
+    </div>
 
     <!-- Detected banner -->
     <div style="padding:9px 11px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);margin-bottom:14px;font-size:11px;line-height:1.5;color:var(--fg-1)">

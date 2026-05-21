@@ -19,6 +19,14 @@ export function readEnvCredentials(): EnvCredentials {
   const apiKey = (process.env.HARNESS_API_KEY || '').trim() || null;
   const accountId = (process.env.HARNESS_ACCOUNT_ID || '').trim() || null;
 
+  // Debug logging
+  console.log('[EnvCredentials] Reading env vars:', {
+    HARNESS_BASE_URL: baseUrl ? `${baseUrl.substring(0, 20)}...` : 'NOT SET',
+    HARNESS_API_KEY: apiKey ? `${apiKey.substring(0, 10)}...` : 'NOT SET',
+    HARNESS_ACCOUNT_ID: accountId ? `${accountId.substring(0, 10)}...` : 'NOT SET',
+    allPresent: baseUrl !== null && apiKey !== null && accountId !== null,
+  });
+
   return {
     allPresent: baseUrl !== null && apiKey !== null && accountId !== null,
     baseUrl,

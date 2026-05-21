@@ -3,7 +3,7 @@ import { SecretStore } from './secretStore';
 import { ConfigManager } from '../config/configManager';
 import { fetchOrgs, fetchProjects } from '../api/accountService';
 import { logger } from '../utils/logger';
-import { EnvCredentials } from './envCredentials';
+import { readEnvCredentials, EnvCredentials } from './envCredentials';
 
 /**
  * Harness PATs and SATs have the structure `pat.<accountId>.<userId>.<random>`
@@ -101,8 +101,10 @@ export async function runOnboarding(secretStore: SecretStore, configManager?: Co
   }
 
   await secretStore.setApiKey(trimmedApiKey);
-  await vscode.workspace.getConfiguration('harness')
-    .update('accountIdentifier', accountId, vscode.ConfigurationTarget.Global);
+  const cfg = vscode.workspace.getConfiguration('harness');
+  await cfg.update('accountIdentifier', accountId, vscode.ConfigurationTarget.Global);
+  // Mark that we're using PAT for auth
+  await cfg.update('authSource', 'pat', vscode.ConfigurationTarget.Global);
 
   // Proceed immediately to workspace setup
   return runWorkspaceSetup(secretStore);
@@ -111,12 +113,15 @@ export async function runOnboarding(secretStore: SecretStore, configManager?: Co
 /** Step 2 — Workspace: pick Org → pick Project via API dropdowns. */
 export async function runWorkspaceSetup(secretStore: SecretStore, _configManager?: ConfigManager): Promise<boolean> {
   const cfg = vscode.workspace.getConfiguration('harness');
-  const baseUrl     = cfg.get<string>('baseUrl', 'https://app.harness.io').replace(/\/$/, '');
-  const accountId   = cfg.get<string>('accountIdentifier', '');
-  const apiKey      = await secretStore.getApiKey();
+
+  // Try env vars first, fall back to settings
+  const envCreds = readEnvCredentials();
+  const baseUrl = envCreds.baseUrl || cfg.get<string>('baseUrl', 'https://app.harness.io').replace(/\/$/, '');
+  const accountId = envCreds.accountId || cfg.get<string>('accountIdentifier', '');
+  const apiKey = envCreds.apiKey || await secretStore.getApiKey();
 
   if (!apiKey || !accountId) {
-    vscode.window.showErrorMessage('Harness: Global credentials not set. Run "Harness: Configure API Key" first.');
+    vscode.window.showErrorMessage('Harness: Global credentials not set. Run "Harness: Configure API Key" first, or set environment variables.');
     return false;
   }
 
@@ -152,12 +157,15 @@ export async function runWorkspaceOverride(secretStore: SecretStore): Promise<bo
   }
 
   const cfg = vscode.workspace.getConfiguration('harness');
-  const baseUrl     = cfg.get<string>('baseUrl', 'https://app.harness.io').replace(/\/$/, '');
-  const accountId   = cfg.get<string>('accountIdentifier', '');
-  const apiKey      = await secretStore.getApiKey();
+
+  // Try env vars first, fall back to settings
+  const envCreds = readEnvCredentials();
+  const baseUrl = envCreds.baseUrl || cfg.get<string>('baseUrl', 'https://app.harness.io').replace(/\/$/, '');
+  const accountId = envCreds.accountId || cfg.get<string>('accountIdentifier', '');
+  const apiKey = envCreds.apiKey || await secretStore.getApiKey();
 
   if (!apiKey || !accountId) {
-    vscode.window.showErrorMessage('Harness: Global credentials not set. Run "Harness: Configure API Key" first.');
+    vscode.window.showErrorMessage('Harness: Global credentials not set. Run "Harness: Configure API Key" first, or set environment variables.');
     return false;
   }
 
@@ -280,6 +288,8 @@ export async function runEnvVarOnboarding(
   await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
   await cfg.update('orgIdentifier',     result.org,     vscode.ConfigurationTarget.Global);
   await cfg.update('projectIdentifier', result.project, vscode.ConfigurationTarget.Global);
+  // Mark that we're using env vars for auth
+  await cfg.update('authSource', 'env', vscode.ConfigurationTarget.Global);
 
   vscode.window.showInformationMessage(
     `Harness: Connected using environment variables. Open the Harness panel to see your pipelines.`
