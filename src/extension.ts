@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './auth/secretStore';
-import { runOnboardingIfNeeded, runOnboarding, runWorkspaceSetup, runWorkspaceOverride } from './auth/onboarding';
+import { runOnboardingIfNeeded, runOnboarding, runWorkspaceSetup, runWorkspaceOverride, runEnvVarOnboarding } from './auth/onboarding';
 import { ConfigManager } from './config/configManager';
+import { readEnvCredentials } from './auth/envCredentials';
 import { HarnessClient } from './api/harnessClient';
 import { PipelinePoller } from './pipeline/pipelinePoller';
 import { SidebarProvider } from './ui/sidebarProvider';
@@ -125,6 +126,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.debug('Extension', `Sidebar visibility changed: ${visible}`);
     poller?.setSidebarVisible(visible);
   });
+
+  // ── Environment variable detection ─────────────────
+  // Read Harness credentials from env once at activation and send to webview
+  const envCreds = readEnvCredentials();
+  bridge.send({
+    type: 'envDetection',
+    envDetection: envCreds,
+  } as any);
 
   // Wire up window focus tracking to pause/resume polling
   context.subscriptions.push(
@@ -697,6 +706,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const ok = await runWorkspaceOverride(secretStore);
       if (ok) {
         // Clear current state and refresh with new org/project
+        const newConfig = await configManager.getConfig();
+        if (newConfig) {
+          const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'pipelines');
+          const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('./fme/fmeClient');
+          const logViewerVariation = await getLogViewerVariation();
+          const webviewTheme = getWebviewThemeVariation();
+          const aiChatEnabled = getAiChatEnabled();
+          const ideThemeKind = vscode.window.activeColorTheme.kind;
+          bridge.send({
+            type: 'GIT_CONTEXT',
+            ctx: null,
+            org: newConfig.orgIdentifier,
+            project: newConfig.projectIdentifier,
+            defaultView,
+            logViewerVariation,
+            webviewTheme,
+            ideThemeKind,
+            aiChatEnabled,
+          });
+        }
+        await startPoller();
+      }
+    }),
+
+    vscode.commands.registerCommand('harness.startEnvVarOnboarding', async () => {
+      const creds = readEnvCredentials();
+      if (!creds.allPresent) {
+        vscode.window.showWarningMessage(
+          'Harness: Environment variables are no longer set. Try reloading the window.'
+        );
+        return;
+      }
+      const ok = await runEnvVarOnboarding(creds, configManager);
+      if (ok) {
+        // Refresh with new org/project
         const newConfig = await configManager.getConfig();
         if (newConfig) {
           const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'pipelines');

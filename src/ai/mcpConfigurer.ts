@@ -32,21 +32,27 @@ export interface ConfigureOptions {
   accountId?: string;
   orgId?: string;
   projectId?: string;
-  scope: MCPScope;                  // NEW — required
+  scope: MCPScope;
+  credentialSource?: 'env' | 'pat';  // NEW — default 'pat'
 }
 
 /**
  * Build Harness MCP server config
+ * When credentialSource === 'env', emits ${HARNESS_*} literals for passthrough
  */
 function buildHarnessServerConfig(options: ConfigureOptions): MCPServerConfig {
+  const useEnvPassthrough = options.credentialSource === 'env';
+
   return {
     type: 'stdio',
     command: 'npx',
     args: ['harness-mcp-v2'],
     env: {
-      HARNESS_API_KEY: options.apiKey,
-      HARNESS_BASE_URL: options.baseUrl || 'https://app.harness.io',
-      ...(options.accountId && { HARNESS_ACCOUNT_ID: options.accountId }),
+      HARNESS_API_KEY: useEnvPassthrough ? '${HARNESS_API_KEY}' : options.apiKey,
+      HARNESS_BASE_URL: useEnvPassthrough ? '${HARNESS_BASE_URL}' : (options.baseUrl || 'https://app.harness.io'),
+      ...(options.accountId && {
+        HARNESS_ACCOUNT_ID: useEnvPassthrough ? '${HARNESS_ACCOUNT_ID}' : options.accountId,
+      }),
       ...(options.orgId && { HARNESS_ORG_ID: options.orgId }),
       ...(options.projectId && { HARNESS_PROJECT_ID: options.projectId }),
     },

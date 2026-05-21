@@ -3,6 +3,7 @@ import { SecretStore } from './secretStore';
 import { ConfigManager } from '../config/configManager';
 import { fetchOrgs, fetchProjects } from '../api/accountService';
 import { logger } from '../utils/logger';
+import { EnvCredentials } from './envCredentials';
 
 /**
  * Harness PATs and SATs have the structure `pat.<accountId>.<userId>.<random>`
@@ -119,83 +120,18 @@ export async function runWorkspaceSetup(secretStore: SecretStore, _configManager
     return false;
   }
 
-  // ── Pick Org ──
-  const orgPick = vscode.window.createQuickPick();
-  orgPick.title        = 'Harness: Select Organization';
-  orgPick.placeholder  = 'Loading organizations…';
-  orgPick.busy         = true;
-  orgPick.ignoreFocusOut = true;
-  orgPick.show();
-
-  let orgs;
-  try {
-    orgs = await fetchOrgs(baseUrl, accountId, apiKey);
-  } catch (e: any) {
-    orgPick.hide();
-    vscode.window.showErrorMessage(`Harness: Failed to fetch organizations — ${e.message}. Check your API key and Account ID.`);
-    return false;
-  }
-
-  if (!orgs.length) {
-    orgPick.hide();
-    vscode.window.showErrorMessage('Harness: No organizations found for this account.');
-    return false;
-  }
-
-  orgPick.items = orgs.map(o => ({ label: o.name, description: o.identifier, identifier: o.identifier }));
-  orgPick.busy  = false;
-  orgPick.placeholder = 'Select an organization';
-
-  const orgSelected = await new Promise<(typeof orgPick.items[0] & { identifier: string }) | undefined>(resolve => {
-    orgPick.onDidAccept(() => resolve(orgPick.selectedItems[0] as any));
-    orgPick.onDidHide(()   => resolve(undefined));
-  });
-  orgPick.hide();
-  if (!orgSelected) return false;
-
-  // ── Pick Project ──
-  const projPick = vscode.window.createQuickPick();
-  projPick.title        = `Harness: Select Project (${orgSelected.label})`;
-  projPick.placeholder  = 'Loading projects…';
-  projPick.busy         = true;
-  projPick.ignoreFocusOut = true;
-  projPick.show();
-
-  let projects;
-  try {
-    projects = await fetchProjects(baseUrl, accountId, orgSelected.identifier, apiKey);
-  } catch (e: any) {
-    projPick.hide();
-    vscode.window.showErrorMessage(`Harness: Failed to fetch projects — ${e.message}`);
-    return false;
-  }
-
-  if (!projects.length) {
-    projPick.hide();
-    vscode.window.showErrorMessage(`Harness: No projects found in org "${orgSelected.label}".`);
-    return false;
-  }
-
-  projPick.items = projects.map(p => ({ label: p.name, description: p.identifier, identifier: p.identifier }));
-  projPick.busy  = false;
-  projPick.placeholder = 'Select a project';
-
-  const projSelected = await new Promise<(typeof projPick.items[0] & { identifier: string }) | undefined>(resolve => {
-    projPick.onDidAccept(() => resolve(projPick.selectedItems[0] as any));
-    projPick.onDidHide(()   => resolve(undefined));
-  });
-  projPick.hide();
-  if (!projSelected) return false;
+  const result = await pickOrgAndProject(baseUrl, accountId, apiKey);
+  if (!result) return false;
 
   // Save to global settings (persists across all workspaces)
   // Clear any workspace-specific overrides first so global settings take effect
   await cfg.update('orgIdentifier',     undefined, vscode.ConfigurationTarget.Workspace);
   await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
-  await cfg.update('orgIdentifier',     orgSelected.identifier,  vscode.ConfigurationTarget.Global);
-  await cfg.update('projectIdentifier', projSelected.identifier, vscode.ConfigurationTarget.Global);
+  await cfg.update('orgIdentifier',     result.org,     vscode.ConfigurationTarget.Global);
+  await cfg.update('projectIdentifier', result.project, vscode.ConfigurationTarget.Global);
 
   vscode.window.showInformationMessage(
-    `Harness: Connected to ${orgSelected.label} / ${projSelected.label}. Open the Harness panel to see your pipelines.`
+    `Harness: Connected. Open the Harness panel to see your pipelines.`
   );
   return true;
 }
@@ -225,9 +161,32 @@ export async function runWorkspaceOverride(secretStore: SecretStore): Promise<bo
     return false;
   }
 
+  const result = await pickOrgAndProject(baseUrl, accountId, apiKey);
+  if (!result) return false;
+
+  // Save to WORKSPACE settings (overrides global for this workspace only)
+  await cfg.update('orgIdentifier',     result.org,     vscode.ConfigurationTarget.Workspace);
+  await cfg.update('projectIdentifier', result.project, vscode.ConfigurationTarget.Workspace);
+
+  vscode.window.showInformationMessage(
+    `Harness: This workspace is now using a project override. ` +
+    `Other workspaces will continue using your global settings.`
+  );
+  return true;
+}
+
+/**
+ * Private helper: org + project quick-pick flow.
+ * Extracted so both runWorkspaceSetup and runEnvVarOnboarding can reuse it.
+ */
+async function pickOrgAndProject(
+  baseUrl: string,
+  accountId: string,
+  apiKey: string
+): Promise<{ org: string; project: string } | null> {
   // ── Pick Org ──
   const orgPick = vscode.window.createQuickPick();
-  orgPick.title        = 'Harness: Select Organization (Workspace Override)';
+  orgPick.title        = 'Harness: Select Organization';
   orgPick.placeholder  = 'Loading organizations…';
   orgPick.busy         = true;
   orgPick.ignoreFocusOut = true;
@@ -239,13 +198,13 @@ export async function runWorkspaceOverride(secretStore: SecretStore): Promise<bo
   } catch (e: any) {
     orgPick.hide();
     vscode.window.showErrorMessage(`Harness: Failed to fetch organizations — ${e.message}. Check your API key and Account ID.`);
-    return false;
+    return null;
   }
 
   if (!orgs.length) {
     orgPick.hide();
     vscode.window.showErrorMessage('Harness: No organizations found for this account.');
-    return false;
+    return null;
   }
 
   orgPick.items = orgs.map(o => ({ label: o.name, description: o.identifier, identifier: o.identifier }));
@@ -257,7 +216,7 @@ export async function runWorkspaceOverride(secretStore: SecretStore): Promise<bo
     orgPick.onDidHide(()   => resolve(undefined));
   });
   orgPick.hide();
-  if (!orgSelected) return false;
+  if (!orgSelected) return null;
 
   // ── Pick Project ──
   const projPick = vscode.window.createQuickPick();
@@ -273,13 +232,13 @@ export async function runWorkspaceOverride(secretStore: SecretStore): Promise<bo
   } catch (e: any) {
     projPick.hide();
     vscode.window.showErrorMessage(`Harness: Failed to fetch projects — ${e.message}`);
-    return false;
+    return null;
   }
 
   if (!projects.length) {
     projPick.hide();
     vscode.window.showErrorMessage(`Harness: No projects found in org "${orgSelected.label}".`);
-    return false;
+    return null;
   }
 
   projPick.items = projects.map(p => ({ label: p.name, description: p.identifier, identifier: p.identifier }));
@@ -291,15 +250,39 @@ export async function runWorkspaceOverride(secretStore: SecretStore): Promise<bo
     projPick.onDidHide(()   => resolve(undefined));
   });
   projPick.hide();
-  if (!projSelected) return false;
+  if (!projSelected) return null;
 
-  // Save to WORKSPACE settings (overrides global for this workspace only)
-  await cfg.update('orgIdentifier',     orgSelected.identifier,  vscode.ConfigurationTarget.Workspace);
-  await cfg.update('projectIdentifier', projSelected.identifier, vscode.ConfigurationTarget.Workspace);
+  return { org: orgSelected.identifier, project: projSelected.identifier };
+}
+
+/**
+ * Environment variable onboarding — skips PAT prompts, uses env vars instead.
+ * Does NOT write apiKey to secret storage or accountIdentifier to global settings.
+ * Only writes workspace org/project metadata.
+ */
+export async function runEnvVarOnboarding(
+  creds: EnvCredentials,
+  _configManager?: ConfigManager
+): Promise<boolean> {
+  if (!creds.allPresent || !creds.baseUrl || !creds.apiKey || !creds.accountId) {
+    vscode.window.showWarningMessage(
+      'Harness: Environment variables are no longer set. Try reloading the window.'
+    );
+    return false;
+  }
+
+  const result = await pickOrgAndProject(creds.baseUrl, creds.accountId, creds.apiKey);
+  if (!result) return false;
+
+  // Save org/project to global settings (workspace metadata, not credentials)
+  const cfg = vscode.workspace.getConfiguration('harness');
+  await cfg.update('orgIdentifier',     undefined, vscode.ConfigurationTarget.Workspace);
+  await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+  await cfg.update('orgIdentifier',     result.org,     vscode.ConfigurationTarget.Global);
+  await cfg.update('projectIdentifier', result.project, vscode.ConfigurationTarget.Global);
 
   vscode.window.showInformationMessage(
-    `Harness: This workspace is now using ${orgSelected.label} / ${projSelected.label}. ` +
-    `Other workspaces will continue using your global settings.`
+    `Harness: Connected using environment variables. Open the Harness panel to see your pipelines.`
   );
   return true;
 }
