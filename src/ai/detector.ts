@@ -376,7 +376,7 @@ async function detectCursor(): Promise<DetectedTool | null> {
       name: 'Cursor',
       sub: null,
       mcpReady,
-      path: cursorDir,
+      path: cursorBaseDir,
       cursorMcpMode,
       cursorOAuthReady,
     };

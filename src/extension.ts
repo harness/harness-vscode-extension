@@ -787,11 +787,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Global);
       await cfg.update('authSource', 'pat', vscode.ConfigurationTarget.Global);
 
-      // Clear workspace overrides if any
-      await cfg.update('baseUrl', undefined, vscode.ConfigurationTarget.Workspace);
-      await cfg.update('accountIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
-      await cfg.update('orgIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
-      await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+      // Clear workspace overrides if a workspace is open
+      if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        await cfg.update('baseUrl', undefined, vscode.ConfigurationTarget.Workspace);
+        await cfg.update('accountIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+        await cfg.update('orgIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+        await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+      }
 
       // Stop poller and reset UI
       poller?.dispose();

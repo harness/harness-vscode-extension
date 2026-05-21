@@ -130,8 +130,10 @@ export async function runWorkspaceSetup(secretStore: SecretStore, _configManager
 
   // Save to global settings (persists across all workspaces)
   // Clear any workspace-specific overrides first so global settings take effect
-  await cfg.update('orgIdentifier',     undefined, vscode.ConfigurationTarget.Workspace);
-  await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+  if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+    await cfg.update('orgIdentifier',     undefined, vscode.ConfigurationTarget.Workspace);
+    await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+  }
   await cfg.update('orgIdentifier',     result.org,     vscode.ConfigurationTarget.Global);
   await cfg.update('projectIdentifier', result.project, vscode.ConfigurationTarget.Global);
 
@@ -284,8 +286,11 @@ export async function runEnvVarOnboarding(
 
   // Save org/project to global settings (workspace metadata, not credentials)
   const cfg = vscode.workspace.getConfiguration('harness');
-  await cfg.update('orgIdentifier',     undefined, vscode.ConfigurationTarget.Workspace);
-  await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+  // Clear workspace overrides if a workspace is open
+  if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+    await cfg.update('orgIdentifier',     undefined, vscode.ConfigurationTarget.Workspace);
+    await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+  }
   await cfg.update('orgIdentifier',     result.org,     vscode.ConfigurationTarget.Global);
   await cfg.update('projectIdentifier', result.project, vscode.ConfigurationTarget.Global);
   // Mark that we're using env vars for auth
