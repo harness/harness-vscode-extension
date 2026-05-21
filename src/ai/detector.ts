@@ -299,18 +299,32 @@ function isCursorPluginOAuthReady(cursorDir: string): boolean {
  * Only detects when running inside Cursor editor (not VS Code)
  */
 /**
- * Get Cursor config directory (cross-platform)
+ * Get Cursor base directory (cross-platform)
  * - macOS/Linux: ~/.cursor
- * - Windows: %APPDATA%\Cursor\User
+ * - Windows: %APPDATA%\Cursor
  */
-function getCursorConfigDir(): string {
+function getCursorBaseDir(): string {
   if (process.platform === 'win32') {
-    // Windows: C:\Users\username\AppData\Roaming\Cursor\User
+    // Windows: C:\Users\username\AppData\Roaming\Cursor
     const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-    return path.join(appData, 'Cursor', 'User');
+    return path.join(appData, 'Cursor');
   } else {
     // macOS/Linux: ~/.cursor
     return path.join(os.homedir(), '.cursor');
+  }
+}
+
+/**
+ * Get Cursor MCP config path (cross-platform)
+ * - macOS/Linux: ~/.cursor/mcp.json
+ * - Windows: %APPDATA%\Cursor\User\mcp.json
+ */
+function getCursorMcpPath(): string {
+  const baseDir = getCursorBaseDir();
+  if (process.platform === 'win32') {
+    return path.join(baseDir, 'User', 'mcp.json');
+  } else {
+    return path.join(baseDir, 'mcp.json');
   }
 }
 
@@ -326,8 +340,8 @@ async function detectCursor(): Promise<DetectedTool | null> {
     }
 
     // Step 1 - Is Cursor installed?
-    const cursorDir = getCursorConfigDir();
-    const cursorInstalled = fs.existsSync(cursorDir);
+    const cursorBaseDir = getCursorBaseDir();
+    const cursorInstalled = fs.existsSync(cursorBaseDir);
 
     if (!cursorInstalled) {
       return null;
@@ -335,12 +349,12 @@ async function detectCursor(): Promise<DetectedTool | null> {
 
     // Step 2 - Which MCP mode?
     // Priority 1: Harness Cursor Plugin (preferred — OAuth, remote MCP, zero config)
-    const pluginDir = path.join(cursorDir, 'plugins');
+    const pluginDir = path.join(cursorBaseDir, 'plugins');
     const pluginPath = findHarnessPlugin(pluginDir);
     const hasPlugin = pluginPath !== null;
 
     // Priority 2: Local harness-mcp-v2 in mcp.json (fallback)
-    const cursorMcpPath = path.join(cursorDir, 'mcp.json');
+    const cursorMcpPath = getCursorMcpPath();
     const hasLocalMcp = hasCursorMcpEntry(cursorMcpPath);
 
     // Determine mode
@@ -352,7 +366,7 @@ async function detectCursor(): Promise<DetectedTool | null> {
     // Step 3 - OAuth status (plugin mode only)
     // For Cursor plugins, OAuth is managed by the plugin system
     // We check if auth files exist in the projects directory
-    const cursorOAuthReady = hasPlugin && isCursorPluginOAuthReady(cursorDir);
+    const cursorOAuthReady = hasPlugin && isCursorPluginOAuthReady(cursorBaseDir);
 
     // Step 4 - Determine mcpReady status
     const mcpReady = (cursorMcpMode === 'plugin' && cursorOAuthReady) || cursorMcpMode === 'local';
