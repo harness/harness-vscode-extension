@@ -177,8 +177,10 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 
 **Personal Access Token (PAT)** — Traditional method
 1. Run **Harness: Configure API Key**
-2. Enter Base URL, PAT, and Account ID
-3. MCP config includes all credentials explicitly
+2. Enter Base URL and PAT
+3. Account ID is **automatically extracted** from your PAT (no manual entry needed!)
+4. If extraction fails, you'll be prompted to enter it manually
+5. Select org/project during onboarding
 
 **Environment Variables** — Passwordless, CI/CD-friendly
 1. Set `HARNESS_API_KEY`, `HARNESS_BASE_URL`, `HARNESS_ACCOUNT_ID` before launching VS Code
@@ -194,11 +196,13 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 
 Run **Harness: Configure API Key** to set:
 - `harness.baseUrl` — Your Harness instance URL (default: `https://app.harness.io`)
-- `harness.accountIdentifier` — Your account ID
+- `harness.accountIdentifier` — Your account ID (auto-extracted from PAT, or set via environment variable)
 - `harness.orgIdentifier` — Default organization
 - `harness.projectIdentifier` — Default project
 
 Your Personal Access Token is stored securely in VS Code's secret storage.
+
+**💡 Tip:** The extension automatically extracts your account ID from your PAT during setup, so you typically only need to provide Base URL and PAT.
 
 ### Optional Settings
 

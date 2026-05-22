@@ -3,6 +3,11 @@
 ## [0.1.6] - 2026-05-21
 
 ### Added
+- **Automatic account ID extraction from PAT**: No more manual account ID entry during setup
+  - Extracts account ID from PAT token format (`pat.<accountId>.<userId>.<random>`)
+  - Verifies credentials with API call before proceeding
+  - Falls back to manual entry if extraction fails or token format doesn't match
+  - Reduces onboarding from 3 steps to 2 steps for most users
 - **GitHub Copilot integration**: Full support for GitHub Copilot Chat alongside Claude Code and Cursor
   - Auto-detects GitHub Copilot extension (only in VS Code, not Cursor)
   - GitHub Copilot icon in AI bar when detected
