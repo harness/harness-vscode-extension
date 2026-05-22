@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.1.6] - 2026-05-21
+
+### Added
+- **Automatic account ID extraction from PAT**: No more manual account ID entry during setup
+  - Extracts account ID from PAT token format (`pat.<accountId>.<userId>.<random>`)
+  - Verifies credentials with API call before proceeding
+  - Falls back to manual entry if extraction fails or token format doesn't match
+  - Reduces onboarding from 3 steps to 2 steps for most users
+- **GitHub Copilot integration**: Full support for GitHub Copilot Chat alongside Claude Code and Cursor
+  - Auto-detects GitHub Copilot extension (only in VS Code, not Cursor)
+  - GitHub Copilot icon in AI bar when detected
+  - MCP configuration with correct paths:
+    - Local (project): `.vscode/mcp.json`
+    - Global: `~/Library/Application Support/Code/User/mcp.json` (macOS), `%APPDATA%\Code\User\mcp.json` (Windows), `~/.config/Code/User/mcp.json` (Linux)
+  - Uses `"servers"` key instead of `"mcpServers"` (Copilot-specific format)
+  - Environment variable inheritance: When using env var auth, only includes org/project IDs in config (API key inherited from VS Code process)
+  - PAT mode includes all credentials explicitly in MCP config
+  - Auto-paste integration: Opens Copilot Chat and pastes prompt automatically
+- **AI bar enabled by default**: AI integration now defaults to ON if FME flag evaluation fails
+  - Provides better fail-safe experience
+  - Only disabled when FME explicitly returns 'off'
+  - Ensures AI features are always available unless intentionally turned off
+
+### Fixed
+- **Workspace settings error**: Fixed "Unable to write to Workspace Settings" error when no workspace is open
+  - Added workspace existence checks before updating workspace settings
+  - Applied to `runWorkspaceSetup()`, `runEnvVarOnboarding()`, and `resetConfiguration` command
+  - Prevents errors during onboarding without an open workspace
+- **Cursor detection**: Fixed undefined variable reference in Cursor detector
+  - Changed `cursorDir` to `cursorBaseDir` in return statement
+  - Cursor now appears correctly in AI bar
+- **Environment variable authentication with MCP**: MCP configuration now respects auth source
+  - When using env vars (`authSource === 'env'`), MCP config writes `${HARNESS_API_KEY}` placeholders
+  - When using PAT, MCP config includes actual credentials
+  - API key resolution checks env vars first, falls back to secret store
+
+### Changed
+- **Cross-platform MCP paths**: Updated MCP configuration paths for all platforms
+  - Claude Code: `~/.claude.json` (all platforms)
+  - Cursor (macOS/Linux): `~/.cursor/mcp.json`
+  - Cursor (Windows): `%APPDATA%\Cursor\User\mcp.json`
+  - GitHub Copilot: Platform-specific paths as listed above
+- **MCP path display in UI**: Dynamically shows correct paths based on selected AI tool
+  - Claude Code: Shows `.mcp.json` (project) or `~/.claude.json` (global)
+  - GitHub Copilot: Shows `.vscode/mcp.json` (project) or OS-specific paths (global)
+  - Tip text updated for Copilot project scope: "Lives in .vscode/ folder"
+
 ## [0.1.5] - 2026-05-13
 
 ### Fixed

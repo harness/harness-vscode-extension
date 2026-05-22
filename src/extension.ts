@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './auth/secretStore';
-import { runOnboardingIfNeeded, runOnboarding, runWorkspaceSetup, runWorkspaceOverride } from './auth/onboarding';
+import { runOnboardingIfNeeded, runOnboarding, runWorkspaceSetup, runWorkspaceOverride, runEnvVarOnboarding } from './auth/onboarding';
 import { ConfigManager } from './config/configManager';
+import { readEnvCredentials } from './auth/envCredentials';
 import { HarnessClient } from './api/harnessClient';
 import { PipelinePoller } from './pipeline/pipelinePoller';
 import { SidebarProvider } from './ui/sidebarProvider';
@@ -17,7 +18,7 @@ import { initFmeClient, destroyFmeClient, getLogViewerVariation } from './fme/fm
 import { LogContentProvider, LOG_SCHEME } from './logs/logContentProvider';
 import { openLogAsEditorTab } from './logs/logEditorTab';
 import { detectAITools } from './ai/detector';
-import { configureMCP } from './ai/mcpConfigurer';
+import { configureMCP, configureCopilotMCP } from './ai/mcpConfigurer';
 import { buildPrompt } from './ai/promptBuilder';
 import { launchAI } from './ai/launcher';
 import { logger } from './utils/logger';
@@ -126,6 +127,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     poller?.setSidebarVisible(visible);
   });
 
+  // ── Environment variable detection ─────────────────
+  // Read Harness credentials from env once at activation and send to webview
+  const envCreds = readEnvCredentials();
+  const initialAuthSource = vscode.workspace.getConfiguration('harness').get<string>('authSource', 'pat');
+  bridge.send({
+    type: 'envDetection',
+    envDetection: envCreds,
+    authSource: initialAuthSource,
+  } as any);
+
   // Wire up window focus tracking to pause/resume polling
   context.subscriptions.push(
     vscode.window.onDidChangeWindowState((state) => {
@@ -148,6 +159,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     currentConfig = config;
     currentClient = new HarnessClient(config);
+
+    // Send GIT_CONTEXT to webview so it knows org/project and can render configured state
+    const cfg = vscode.workspace.getConfiguration('harness');
+    const defaultView = cfg.get<string>('defaultView', 'pipelines');
+    const authSource = cfg.get<string>('authSource', 'pat');
+    const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('./fme/fmeClient');
+    const logViewerVariation = await getLogViewerVariation();
+    const webviewTheme = getWebviewThemeVariation();
+    const aiChatEnabled = getAiChatEnabled();
+    const ideThemeKind = vscode.window.activeColorTheme.kind;
+
+    bridge.send({
+      type: 'GIT_CONTEXT',
+      ctx: null, // Will be populated by poller when git context is available
+      org: config.orgIdentifier,
+      project: config.projectIdentifier,
+      authSource,
+      defaultView,
+      logViewerVariation,
+      webviewTheme,
+      ideThemeKind,
+      aiChatEnabled,
+    });
+
     poller = new PipelinePoller(currentClient, config, diagnostics, bridge, outputChannel);
     poller.start();
 
@@ -350,11 +385,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // Launch AI tool
         // Pass workspace folder so CLI uses project-specific MCP config
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const mcpConfigPath = detection.mcpScope.activeScope === 'project' && detection.mcpScope.project
+          ? detection.mcpScope.project.path
+          : detection.mcpScope.global.path;
         const result = await launchAI({
           prompt,
           toolId: detection.activeTool as any,
           config: currentConfig || undefined,
           cwd: workspaceFolder,
+          mcpConfigPath,
         });
 
         if (result.type === 'response') {
@@ -385,7 +424,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     } else if (m.type === 'AI_CONFIGURE_MCP') {
       // Configure Harness MCP server
-      logger.info('AI', 'Configuring MCP...');
+      const aiMsg = m as { type: 'AI_CONFIGURE_MCP'; scope?: 'project' | 'global' };
+      const scope: 'project' | 'global' = aiMsg.scope ?? 'project';   // default to project
+
+      logger.info('AI', `Configuring MCP (${scope} scope)...`);
 
       // Cursor uses the Harness Plugin — never show the MCP configure panel for Cursor
       const detection = await detectAITools(getAIToolPreference());
@@ -404,31 +446,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       try {
-        const apiKey = await secretStore.getApiKey();
+        // Check auth source
+        const authSource = vscode.workspace.getConfiguration('harness').get<string>('authSource', 'pat');
+        const credentialSource = authSource as 'env' | 'pat';
+
+        // Get API key from environment variables or secret store
+        const envCreds = readEnvCredentials();
+        const apiKey = envCreds.apiKey || await secretStore.getApiKey();
+
         if (!apiKey) {
           bridge.send({
             type: 'AI_ERROR',
-            message: 'No API key found. Please configure Harness API key first.',
+            message: 'No API key found. Please configure Harness API key first or set HARNESS_API_KEY environment variable.',
           });
           return;
         }
 
-        await configureMCP({
+        // Choose the right configurer based on active tool
+        const configOptions = {
           apiKey,
           baseUrl: currentConfig.baseUrl,
           accountId: currentConfig.accountIdentifier,
           orgId: currentConfig.orgIdentifier,
           projectId: currentConfig.projectIdentifier,
-        });
+          scope,
+          credentialSource,  // Pass auth source so MCP config uses env vars when appropriate
+        };
+
+        const result = tool?.id === 'copilot'
+          ? await configureCopilotMCP(configOptions)
+          : await configureMCP(configOptions);
 
         // Get active tool to send back in confirmation
-        const detection = await detectAITools(getAIToolPreference());
-        const activeTool = detection.activeTool || 'claudecode-cli';
+        const updatedDetection = await detectAITools(getAIToolPreference());
+        const activeTool = updatedDetection.activeTool || 'claudecode-cli';
 
-        logger.info('AI', 'MCP configured successfully');
+        logger.info('AI', `MCP configured successfully at ${result.path}`);
         bridge.send({
           type: 'AI_CONFIG_DONE',
           tool: activeTool,
+          scope: result.scope,                            // NEW — webview shows path in toast
+          path: result.path,                              // NEW
         });
 
         // Re-detect to update MCP readiness state
@@ -447,6 +505,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           message: `Failed to configure MCP: ${msg}`,
         });
       }
+    } else if (m.type === 'AI_OPEN_MCP_CONFIG') {
+      const aiMsg = m as { type: 'AI_OPEN_MCP_CONFIG'; scope: 'project' | 'global' };
+      const { detectMCPScope } = await import('./ai/detector');
+      const detection = detectMCPScope();
+      const target = aiMsg.scope === 'project' ? detection.project : detection.global;
+      if (!target) return;
+      const uri = vscode.Uri.file(target.path);
+      await vscode.commands.executeCommand('vscode.open', uri);
     } else if (m.type === 'AI_SWITCH_TOOL') {
       // Switch active AI tool
       const aiMsg = m as any;
@@ -507,6 +573,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           message: msg,
         });
       }
+    } else if (m.type === 'startEnvVarOnboarding') {
+      // Delegate to the existing command handler
+      vscode.commands.executeCommand('harness.startEnvVarOnboarding');
     }
   });
 
@@ -626,7 +695,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const ctx = await (await import('./git/gitContext')).getGitContext();
         const config = await configManager.getConfig();
         if (config) {
-          const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'pipelines');
+          const cfg = vscode.workspace.getConfiguration('harness');
+          const defaultView = cfg.get<string>('defaultView', 'pipelines');
+          const authSource = cfg.get<string>('authSource', 'pat');
           const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('./fme/fmeClient');
           const logViewerVariation = await getLogViewerVariation();
           const webviewTheme = getWebviewThemeVariation();
@@ -637,6 +708,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             ctx,
             org: config.orgIdentifier,
             project: config.projectIdentifier,
+            authSource,
             defaultView,
             logViewerVariation,
             webviewTheme,
@@ -650,27 +722,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('harness.selectProject', async () => {
       const ok = await runWorkspaceSetup(secretStore);
       if (ok) {
-        // Clear current state and refresh with new org/project
-        const newConfig = await configManager.getConfig();
-        if (newConfig) {
-          const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'pipelines');
-          const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('./fme/fmeClient');
-          const logViewerVariation = await getLogViewerVariation();
-          const webviewTheme = getWebviewThemeVariation();
-          const aiChatEnabled = getAiChatEnabled();
-          const ideThemeKind = vscode.window.activeColorTheme.kind;
-          bridge.send({
-            type: 'GIT_CONTEXT',
-            ctx: null,
-            org: newConfig.orgIdentifier,
-            project: newConfig.projectIdentifier,
-            defaultView,
-            logViewerVariation,
-            webviewTheme,
-            ideThemeKind,
-            aiChatEnabled,
-          });
-        }
+        // Restart poller with new org/project - this will fetch fresh data
         await startPoller();
       }
     }),
@@ -678,38 +730,91 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('harness.switchProject', async () => {
       const ok = await runWorkspaceOverride(secretStore);
       if (ok) {
-        // Clear current state and refresh with new org/project
+        // Restart poller with new org/project - this will fetch fresh data
+        await startPoller();
+      }
+    }),
+
+    vscode.commands.registerCommand('harness.startEnvVarOnboarding', async () => {
+      const creds = readEnvCredentials();
+      if (!creds.allPresent) {
+        vscode.window.showWarningMessage(
+          'Harness: Environment variables are no longer set. Try reloading the window.'
+        );
+        return;
+      }
+      const ok = await runEnvVarOnboarding(creds, configManager);
+      logger.info('Extension', 'Env var onboarding result:', ok);
+      if (ok) {
+        // Refresh with new org/project - mark as configured
         const newConfig = await configManager.getConfig();
+        logger.info('Extension', 'New config after env onboarding:', { org: newConfig?.orgIdentifier, project: newConfig?.projectIdentifier });
         if (newConfig) {
-          const defaultView = vscode.workspace.getConfiguration('harness').get<string>('defaultView', 'pipelines');
+          const cfg = vscode.workspace.getConfiguration('harness');
+          const defaultView = cfg.get<string>('defaultView', 'pipelines');
+          const authSource = cfg.get<string>('authSource', 'pat');
           const { getLogViewerVariation, getWebviewThemeVariation, getAiChatEnabled } = await import('./fme/fmeClient');
           const logViewerVariation = await getLogViewerVariation();
           const webviewTheme = getWebviewThemeVariation();
           const aiChatEnabled = getAiChatEnabled();
           const ideThemeKind = vscode.window.activeColorTheme.kind;
+          logger.info('Extension', 'Sending STATE_UPDATE and GIT_CONTEXT to webview');
+          bridge.send({
+            type: 'STATE_UPDATE',
+            configured: true,
+          } as any);
           bridge.send({
             type: 'GIT_CONTEXT',
             ctx: null,
             org: newConfig.orgIdentifier,
             project: newConfig.projectIdentifier,
+            authSource,
             defaultView,
             logViewerVariation,
             webviewTheme,
             ideThemeKind,
             aiChatEnabled,
           });
+          logger.info('Extension', 'Messages sent, starting poller');
         }
         await startPoller();
       }
     }),
 
-    vscode.commands.registerCommand('harness.clearApiKey', async () => {
+    vscode.commands.registerCommand('harness.resetConfiguration', async () => {
+      const confirm = await vscode.window.showWarningMessage(
+        'Reset all Harness configuration? This will clear your API key, account settings, and org/project selection.',
+        { modal: true },
+        'Reset Configuration'
+      );
+      if (confirm !== 'Reset Configuration') return;
+
+      // Clear secret storage
       await secretStore.deleteApiKey();
+
+      // Clear all settings
+      const cfg = vscode.workspace.getConfiguration('harness');
+      await cfg.update('baseUrl', undefined, vscode.ConfigurationTarget.Global);
+      await cfg.update('accountIdentifier', undefined, vscode.ConfigurationTarget.Global);
+      await cfg.update('orgIdentifier', undefined, vscode.ConfigurationTarget.Global);
+      await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Global);
+      await cfg.update('authSource', 'pat', vscode.ConfigurationTarget.Global);
+
+      // Clear workspace overrides if a workspace is open
+      if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        await cfg.update('baseUrl', undefined, vscode.ConfigurationTarget.Workspace);
+        await cfg.update('accountIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+        await cfg.update('orgIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+        await cfg.update('projectIdentifier', undefined, vscode.ConfigurationTarget.Workspace);
+      }
+
+      // Stop poller and reset UI
       poller?.dispose();
       poller = undefined;
       statusBar.setNotConfigured();
       bridge.send({ type: 'AUTH_ERROR' });
-      vscode.window.showInformationMessage('Harness: API key cleared.');
+
+      vscode.window.showInformationMessage('Harness: Configuration reset. You can now reconfigure from scratch.');
     }),
 
     vscode.commands.registerCommand('harness.refreshNow', () => {
@@ -803,7 +908,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   // ── Initial start ─────────────────────────────────
-  // Check if configured without prompting - user will see empty state in sidebar
+  // Validate auth source and check if configured
+  const authSource = vscode.workspace.getConfiguration('harness').get<string>('authSource', 'pat');
+
+  if (authSource === 'env') {
+    // Validate env vars are still present
+    const envCreds = readEnvCredentials();
+    if (!envCreds.allPresent) {
+      // Env vars were removed - clear authSource and show error
+      logger.warn('Extension', 'authSource=env but env vars not found - clearing authSource');
+      await vscode.workspace.getConfiguration('harness').update('authSource', 'pat', vscode.ConfigurationTarget.Global);
+      statusBar.setNotConfigured();
+      bridge.send({ type: 'AUTH_ERROR' });
+      vscode.window.showWarningMessage(
+        'Harness: Environment variables (HARNESS_API_KEY, HARNESS_BASE_URL, HARNESS_ACCOUNT_ID) are no longer set. Please reload the window after setting them, or reconfigure with a Personal Access Token.',
+        'Reload Window',
+        'Configure PAT'
+      ).then(action => {
+        if (action === 'Reload Window') {
+          vscode.commands.executeCommand('workbench.action.reloadWindow');
+        } else if (action === 'Configure PAT') {
+          vscode.commands.executeCommand('harness.configureApiKey');
+        }
+      });
+      return;
+    }
+  }
+
   const configured = await configManager.isConfigured();
   if (configured) {
     await startPoller();
@@ -824,9 +955,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }).catch(err => {
     logger.error('AI', 'Detection failed:', err);
     // Send empty detection result on error
+    const { detectMCPScope } = require('./ai/detector');
+    const scope = detectMCPScope();
     bridge.send({
       type: 'STATE_UPDATE',
-      aiDetection: { tools: [], activeTool: null, mcpConfigPath: null },
+      aiDetection: { tools: [], activeTool: null, mcpConfigPath: null, mcpScope: scope },
     });
   });
 }

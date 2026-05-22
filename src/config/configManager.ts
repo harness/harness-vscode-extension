@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { SecretStore } from '../auth/secretStore';
 import { logger } from '../utils/logger';
+import { readEnvCredentials } from '../auth/envCredentials';
 
 export interface HarnessConfig {
   baseUrl: string;
@@ -18,22 +19,27 @@ export class ConfigManager {
 
   async getConfig(): Promise<HarnessConfig | null> {
     const cfg = vscode.workspace.getConfiguration('harness');
-    const apiKey = await this.secretStore.getApiKey();
+
+    // Try env vars first, fall back to settings
+    const envCreds = readEnvCredentials();
+    const apiKey = envCreds.apiKey || await this.secretStore.getApiKey();
     if (!apiKey) {
-      logger.debug('ConfigManager', 'No API key found');
+      logger.debug('ConfigManager', 'No API key found in env or secret storage');
       return null;
     }
 
-    const accountIdentifier = cfg.get<string>('accountIdentifier', '').trim();
+    const accountIdentifier = envCreds.accountId || cfg.get<string>('accountIdentifier', '').trim();
     if (!accountIdentifier) {
-      logger.debug('ConfigManager', 'No account identifier found');
+      logger.debug('ConfigManager', 'No account identifier found in env or settings');
       return null;
     }
 
+    const baseUrl = envCreds.baseUrl || cfg.get<string>('baseUrl', 'https://app.harness.io');
     const orgIdentifier = cfg.get<string>('orgIdentifier', 'default').trim();
     const projectIdentifier = cfg.get<string>('projectIdentifier', '').trim();
 
     logger.debug('ConfigManager', 'Config loaded:', {
+      source: envCreds.allPresent ? 'env vars' : 'settings',
       accountIdentifier,
       orgIdentifier,
       projectIdentifier,
@@ -41,7 +47,7 @@ export class ConfigManager {
     });
 
     return {
-      baseUrl:                  cfg.get<string>('baseUrl', 'https://app.harness.io').replace(/\/$/, ''),
+      baseUrl: baseUrl.replace(/\/$/, ''),
       accountIdentifier,
       orgIdentifier,
       projectIdentifier,
@@ -52,8 +58,13 @@ export class ConfigManager {
     };
   }
 
-  /** True when PAT + accountIdentifier are set globally — workspace org/project may still be missing. */
+  /** True when PAT + accountIdentifier are set globally (settings or env vars) — workspace org/project may still be missing. */
   async hasGlobalCredentials(): Promise<boolean> {
+    // Check env vars first
+    const envCreds = readEnvCredentials();
+    if (envCreds.apiKey && envCreds.accountId) return true;
+
+    // Fall back to settings
     const hasKey = await this.secretStore.hasApiKey();
     if (!hasKey) return false;
     const cfg = vscode.workspace.getConfiguration('harness');
@@ -61,6 +72,18 @@ export class ConfigManager {
   }
 
   async isConfigured(): Promise<boolean> {
+    // Check env vars first
+    const envCreds = readEnvCredentials();
+    if (envCreds.allPresent) {
+      // With env vars, we still need org/project from settings
+      const cfg = vscode.workspace.getConfiguration('harness');
+      return (
+        !!cfg.get<string>('orgIdentifier', '').trim() &&
+        !!cfg.get<string>('projectIdentifier', '').trim()
+      );
+    }
+
+    // Fall back to settings
     const hasKey = await this.secretStore.hasApiKey();
     if (!hasKey) return false;
     const cfg = vscode.workspace.getConfiguration('harness');

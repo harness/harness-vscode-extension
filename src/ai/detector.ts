@@ -7,9 +7,10 @@ import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
 import { logger } from '../utils/logger';
+import { MCPScope, MCPDetectionState } from './types';
 
 export interface DetectedTool {
-  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor';
+  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot';
   name: string;
   sub: string | null;
   mcpReady: boolean;
@@ -22,6 +23,7 @@ export interface DetectionResult {
   tools: DetectedTool[];
   activeTool: string | null; // ID of the highest-priority tool
   mcpConfigPath: string | null;
+  mcpScope: MCPDetectionState;    // NEW — full scope state for the webview
 }
 
 /**
@@ -94,44 +96,65 @@ async function detectClaudeExtension(): Promise<DetectedTool | null> {
   }
 }
 
+/** Absolute path to the project-level MCP file, or null if no workspace is open. */
+export function getProjectMCPConfigPath(): string | null {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return null;
+  return path.join(folder.uri.fsPath, '.mcp.json');
+}
+
+/** Absolute path to the global config file. Same value getMCPConfigPath() returns today. */
+export function getGlobalMCPConfigPath(): string {
+  return path.join(os.homedir(), '.claude.json');
+}
+
+/**
+ * Read Harness MCP config from a specific file
+ */
+function readHarnessFromFile(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const harness = config?.mcpServers?.harness;
+    if (!harness) return false;
+    const hasCommand = typeof harness.command === 'string' && harness.command.length > 0;
+    const hasEnv = harness.env && typeof harness.env === 'object';
+    return hasCommand && hasEnv;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect MCP scope state (project, global, both)
+ */
+export function detectMCPScope(): MCPDetectionState {
+  const projectPath = getProjectMCPConfigPath();
+  const globalPath = getGlobalMCPConfigPath();
+
+  const projectConfigured = projectPath ? readHarnessFromFile(projectPath) : false;
+  const globalConfigured = readHarnessFromFile(globalPath);
+
+  let activeScope: MCPScope | null = null;
+  if (projectConfigured) activeScope = 'project';        // project wins
+  else if (globalConfigured) activeScope = 'global';
+
+  return {
+    project: projectPath ? { scope: 'project', path: projectPath, configured: projectConfigured } : null,
+    global: { scope: 'global', path: globalPath, configured: globalConfigured },
+    activeScope,
+    conflict: projectConfigured && globalConfigured,
+  };
+}
+
 /**
  * Check if Harness MCP server is configured in Claude Desktop config
  */
 async function checkMCPReady(): Promise<boolean> {
-  const configPath = getClaudeConfigPath();
-
-  if (!configPath || !fs.existsSync(configPath)) {
-    return false;
-  }
-
-  try {
-    const configContent = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(configContent);
-
-    // Check if mcpServers.harness exists and has required fields
-    const harnessServer = config?.mcpServers?.harness;
-    if (!harnessServer) {
-      return false;
-    }
-
-    // Verify it has command and env (at minimum)
-    const hasCommand = typeof harnessServer.command === 'string' && harnessServer.command.length > 0;
-    const hasEnv = harnessServer.env && typeof harnessServer.env === 'object';
-
-    return hasCommand && hasEnv;
-  } catch (error) {
-    // Invalid JSON or read error
-    return false;
-  }
+  const s = detectMCPScope();
+  return s.activeScope !== null;
 }
 
-/**
- * Get Claude Code config path
- * Returns ~/.claude.json on all platforms
- */
-function getClaudeConfigPath(): string {
-  return path.join(os.homedir(), '.claude.json');
-}
 
 /**
  * Check if Harness MCP entry exists in Cursor mcp.json
@@ -275,6 +298,36 @@ function isCursorPluginOAuthReady(cursorDir: string): boolean {
  * Detect Cursor AI editor
  * Only detects when running inside Cursor editor (not VS Code)
  */
+/**
+ * Get Cursor base directory (cross-platform)
+ * - macOS/Linux: ~/.cursor
+ * - Windows: %APPDATA%\Cursor
+ */
+function getCursorBaseDir(): string {
+  if (process.platform === 'win32') {
+    // Windows: C:\Users\username\AppData\Roaming\Cursor
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'Cursor');
+  } else {
+    // macOS/Linux: ~/.cursor
+    return path.join(os.homedir(), '.cursor');
+  }
+}
+
+/**
+ * Get Cursor MCP config path (cross-platform)
+ * - macOS/Linux: ~/.cursor/mcp.json
+ * - Windows: %APPDATA%\Cursor\User\mcp.json
+ */
+function getCursorMcpPath(): string {
+  const baseDir = getCursorBaseDir();
+  if (process.platform === 'win32') {
+    return path.join(baseDir, 'User', 'mcp.json');
+  } else {
+    return path.join(baseDir, 'mcp.json');
+  }
+}
+
 async function detectCursor(): Promise<DetectedTool | null> {
   try {
     // Step 0 - Are we running in Cursor editor?
@@ -287,8 +340,8 @@ async function detectCursor(): Promise<DetectedTool | null> {
     }
 
     // Step 1 - Is Cursor installed?
-    const cursorDir = path.join(os.homedir(), '.cursor');
-    const cursorInstalled = fs.existsSync(cursorDir);
+    const cursorBaseDir = getCursorBaseDir();
+    const cursorInstalled = fs.existsSync(cursorBaseDir);
 
     if (!cursorInstalled) {
       return null;
@@ -296,12 +349,12 @@ async function detectCursor(): Promise<DetectedTool | null> {
 
     // Step 2 - Which MCP mode?
     // Priority 1: Harness Cursor Plugin (preferred — OAuth, remote MCP, zero config)
-    const pluginDir = path.join(cursorDir, 'plugins');
+    const pluginDir = path.join(cursorBaseDir, 'plugins');
     const pluginPath = findHarnessPlugin(pluginDir);
     const hasPlugin = pluginPath !== null;
 
     // Priority 2: Local harness-mcp-v2 in mcp.json (fallback)
-    const cursorMcpPath = path.join(cursorDir, 'mcp.json');
+    const cursorMcpPath = getCursorMcpPath();
     const hasLocalMcp = hasCursorMcpEntry(cursorMcpPath);
 
     // Determine mode
@@ -313,7 +366,7 @@ async function detectCursor(): Promise<DetectedTool | null> {
     // Step 3 - OAuth status (plugin mode only)
     // For Cursor plugins, OAuth is managed by the plugin system
     // We check if auth files exist in the projects directory
-    const cursorOAuthReady = hasPlugin && isCursorPluginOAuthReady(cursorDir);
+    const cursorOAuthReady = hasPlugin && isCursorPluginOAuthReady(cursorBaseDir);
 
     // Step 4 - Determine mcpReady status
     const mcpReady = (cursorMcpMode === 'plugin' && cursorOAuthReady) || cursorMcpMode === 'local';
@@ -323,7 +376,7 @@ async function detectCursor(): Promise<DetectedTool | null> {
       name: 'Cursor',
       sub: null,
       mcpReady,
-      path: cursorDir,
+      path: cursorBaseDir,
       cursorMcpMode,
       cursorOAuthReady,
     };
@@ -333,7 +386,102 @@ async function detectCursor(): Promise<DetectedTool | null> {
 }
 
 /**
- * Detect all available AI tools (Claude Code CLI + Extension + Cursor)
+ * Get GitHub Copilot MCP config paths (cross-platform)
+ * - Local (project): .vscode/mcp.json
+ * - Global (user):
+ *   - macOS: ~/Library/Application Support/Code/User/mcp.json
+ *   - Windows: %APPDATA%\Code\User\mcp.json
+ *   - Linux: ~/.config/Code/User/mcp.json
+ */
+function getCopilotMcpPaths(): { local: string | null; global: string } {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  const local = workspaceFolder ? path.join(workspaceFolder.uri.fsPath, '.vscode', 'mcp.json') : null;
+
+  let global: string;
+  if (process.platform === 'darwin') {
+    global = path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'mcp.json');
+  } else if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    global = path.join(appData, 'Code', 'User', 'mcp.json');
+  } else {
+    // Linux
+    global = path.join(os.homedir(), '.config', 'Code', 'User', 'mcp.json');
+  }
+
+  return { local, global };
+}
+
+/**
+ * Read Harness MCP config from a GitHub Copilot config file
+ * GitHub Copilot uses "servers" key instead of "mcpServers"
+ */
+function readHarnessFromCopilotFile(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const harness = config?.servers?.harness;
+    if (!harness) return false;
+    const hasCommand = typeof harness.command === 'string' && harness.command.length > 0;
+    const hasEnv = harness.env && typeof harness.env === 'object';
+    return hasCommand && hasEnv;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if Harness MCP is configured in GitHub Copilot
+ * Priority: local (.vscode/mcp.json) > global (~/Library/Application Support/Code/User/mcp.json)
+ */
+function checkCopilotMcpReady(): boolean {
+  const paths = getCopilotMcpPaths();
+
+  // Check local first
+  if (paths.local && readHarnessFromCopilotFile(paths.local)) {
+    return true;
+  }
+
+  // Fall back to global
+  return readHarnessFromCopilotFile(paths.global);
+}
+
+/**
+ * Detect GitHub Copilot via VS Code extensions API
+ * Only detects in VS Code (not Cursor or other distributions)
+ */
+async function detectGitHubCopilot(): Promise<DetectedTool | null> {
+  try {
+    // Only detect in VS Code, not Cursor
+    const isVSCode = !vscode.env.appName.toLowerCase().includes('cursor');
+    if (!isVSCode) {
+      return null;
+    }
+
+    // Check if GitHub Copilot extension is installed
+    const copilotExtension = vscode.extensions.getExtension('GitHub.copilot') ||
+                            vscode.extensions.getExtension('GitHub.copilot-chat');
+
+    if (!copilotExtension) {
+      return null;
+    }
+
+    // Check MCP configuration
+    const mcpReady = checkCopilotMcpReady();
+
+    return {
+      id: 'copilot',
+      name: 'GitHub Copilot',
+      sub: null,
+      mcpReady,
+      path: copilotExtension.extensionPath,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Detect all available AI tools (Claude Code CLI + Extension + Cursor + GitHub Copilot)
  * Returns preferred tool as activeTool, or first available if no preference
  */
 export async function detectAITools(preferredToolId?: string): Promise<DetectionResult> {
@@ -357,6 +505,12 @@ export async function detectAITools(preferredToolId?: string): Promise<Detection
     tools.push(cursor);
   }
 
+  // Detect GitHub Copilot
+  const copilot = await detectGitHubCopilot();
+  if (copilot) {
+    tools.push(copilot);
+  }
+
   // Use preferred tool if specified and available, otherwise default to first
   let activeTool: string | null = null;
   if (preferredToolId && tools.some(t => t.id === preferredToolId)) {
@@ -365,17 +519,25 @@ export async function detectAITools(preferredToolId?: string): Promise<Detection
     activeTool = tools.length > 0 ? tools[0].id : null;
   }
 
+  // Populate scope state
+  const scope = detectMCPScope();
+  const mcpConfigPath = scope.activeScope === 'project' && scope.project
+    ? scope.project.path
+    : scope.global.path;
+
   return {
     tools,
     activeTool,
-    mcpConfigPath: tools.length > 0 ? getClaudeConfigPath() : null,
+    mcpConfigPath: tools.length > 0 ? mcpConfigPath : null,
+    mcpScope: scope,
   };
 }
 
 /**
  * Get the MCP config path for Claude Code
  * Used by MCP configurer to write settings
+ * @deprecated Use getGlobalMCPConfigPath() instead
  */
 export function getMCPConfigPath(): string {
-  return getClaudeConfigPath();
+  return getGlobalMCPConfigPath();
 }

@@ -12,7 +12,7 @@ See pipeline status, investigate failures, and approve deployments right in your
 - 📝 **Syntax-highlighted logs** — View step logs in editor tabs with full syntax highlighting
 - ✅ **Approve deployments** — Handle approval gates without leaving your editor
 - 🔍 **Search & filter** — Find pipelines and executions quickly
-- 🤖 **AI integration** — Ask Claude Code or Cursor AI about your pipeline failures (with automatic context)
+- 🤖 **AI integration** — Ask Claude Code, GitHub Copilot, or Cursor AI about your pipeline failures (with automatic context)
 
 ---
 
@@ -110,7 +110,7 @@ Switch between two views using the tabs at the top:
 
 ## 🤖 AI Integration
 
-Ask questions about your pipelines using **Claude Code** or **Cursor AI** with automatic context injection.
+Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or **Cursor AI** with automatic context injection.
 
 ### Supported AI Tools
 
@@ -119,6 +119,12 @@ Ask questions about your pipelines using **Claude Code** or **Cursor AI** with a
 - **CLI mode**: Fully automated — responses appear directly in Harness sidebar
 - **Extension mode**: Semi-automated — auto-opens Claude Code panel with prompt ready
 - Uses local MCP server configuration (`~/.claude.json`)
+
+**GitHub Copilot**
+- Auto-detected in VS Code when GitHub Copilot extension is installed
+- Opens Copilot Chat with auto-paste integration
+- MCP configuration uses VS Code-specific paths (`.vscode/mcp.json` for project scope)
+- Inherits environment variables from VS Code process when using env var auth
 
 **Cursor AI**
 - Auto-detected when running in Cursor editor
@@ -131,8 +137,19 @@ Ask questions about your pipelines using **Claude Code** or **Cursor AI** with a
 **For Claude Code:**
 1. Install Claude Code (CLI or VS Code Extension)
 2. Click **Configure MCP** in the AI footer
-3. Your Harness credentials are automatically configured in `~/.claude.json`
-4. Restart Claude Code to activate the MCP server
+3. Choose scope (Project or Global):
+   - **Project**: `.mcp.json` in workspace root — shared with team if committed
+   - **Global**: `~/.claude.json` in home folder — personal, applies to all projects
+4. Your Harness credentials are automatically configured
+5. Restart Claude Code to activate the MCP server
+
+**For GitHub Copilot:**
+1. Install [GitHub Copilot extension](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) in VS Code
+2. Click **Configure MCP** in the AI footer
+3. Choose scope (Project or Global):
+   - **Project**: `.vscode/mcp.json` in workspace root — shared with team
+   - **Global**: Platform-specific path in home folder — personal
+4. Restart VS Code to activate the MCP server
 
 **For Cursor:**
 1. **Recommended**: Install [Harness Plugin](https://cursor.com/plugins) in Cursor
@@ -142,8 +159,8 @@ Ask questions about your pipelines using **Claude Code** or **Cursor AI** with a
 
 ### Usage
 
-- Type your question in the AI footer (appears when AI integration is enabled)
-- Select your preferred tool using the dropdown (Claude Code CLI / Extension / Cursor)
+- Type your question in the AI footer (appears at the bottom of the Harness panel)
+- Select your preferred tool using the dropdown (Claude Code CLI / Extension / GitHub Copilot / Cursor)
 - Tool preference persists across VS Code sessions
 - Pipeline context automatically included in every query
 
@@ -156,6 +173,21 @@ Ask questions about your pipelines using **Claude Code** or **Cursor AI** with a
 - "What changed between this run and the last successful one?"
 - "How can I fix the failing test in the build stage?"
 
+### Authentication Methods
+
+**Personal Access Token (PAT)** — Traditional method
+1. Run **Harness: Configure API Key**
+2. Enter Base URL and PAT
+3. Account ID is **automatically extracted** from your PAT (no manual entry needed!)
+4. If extraction fails, you'll be prompted to enter it manually
+5. Select org/project during onboarding
+
+**Environment Variables** — Passwordless, CI/CD-friendly
+1. Set `HARNESS_API_KEY`, `HARNESS_BASE_URL`, `HARNESS_ACCOUNT_ID` before launching VS Code
+2. Extension auto-detects and uses environment variables
+3. MCP config uses environment variable references (for Claude Code) or inherits from process (for GitHub Copilot)
+4. Select org/project during onboarding
+
 ---
 
 ## ⚙️ Configuration
@@ -164,11 +196,13 @@ Ask questions about your pipelines using **Claude Code** or **Cursor AI** with a
 
 Run **Harness: Configure API Key** to set:
 - `harness.baseUrl` — Your Harness instance URL (default: `https://app.harness.io`)
-- `harness.accountIdentifier` — Your account ID
+- `harness.accountIdentifier` — Your account ID (auto-extracted from PAT, or set via environment variable)
 - `harness.orgIdentifier` — Default organization
 - `harness.projectIdentifier` — Default project
 
 Your Personal Access Token is stored securely in VS Code's secret storage.
+
+**💡 Tip:** The extension automatically extracts your account ID from your PAT during setup, so you typically only need to provide Base URL and PAT.
 
 ### Optional Settings
 
@@ -190,6 +224,7 @@ Use **Harness: Switch Project (This Workspace)** to override org/project for spe
 | Command | Description |
 |---------|-------------|
 | **Harness: Configure API Key** | Set up your credentials and project (global) |
+| **Harness: Reset Auth Configuration** | Clear all credentials and org/project settings |
 | **Harness: Select Org & Project** | Change global org/project settings |
 | **Harness: Switch Project (This Workspace)** | Override for current workspace only |
 | **Harness: Refresh Pipeline Status** | Force refresh immediately |

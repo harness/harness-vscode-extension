@@ -267,6 +267,7 @@ const TERMINAL_STATUSES_SET = new Set([
 ]);
 
 const state = {
+  initializing:  true, // true until we receive envDetection message
   gitCtx:        null as GitCtx | null,
   org:           '' as string,
   project:       '' as string,
@@ -325,20 +326,28 @@ const state = {
   ideThemeKind: 1 as number, // 1=Light, 2=Dark, 3=HighContrast, 4=HighContrastLight
 
   // AI chat feature flag (FME vscode-mcp-integration flag)
-  aiChatEnabled: false as boolean, // from FME flag, default to disabled until flag confirms
+  aiChatEnabled: true as boolean, // from FME flag, default to enabled (fail-safe for FME failures)
 
   // App menu state
   menuOpen: false,
 
   // AI integration state
-  aiDetection: null as { tools: Array<{ id: string; name: string; sub: string | null; mcpReady: boolean }>; activeTool: string | null; mcpConfigPath: string | null } | null,
+  aiDetection: null as { tools: Array<{ id: string; name: string; sub: string | null; mcpReady: boolean }>; activeTool: string | null; mcpConfigPath: string | null; mcpScope: { project: { path: string; configured: boolean } | null; global: { path: string; configured: boolean }; activeScope: 'project' | 'global' | null; conflict: boolean } } | null,
   aiState: 'detecting' as 'detecting' | 'none' | 'unconfigured' | 'ready' | 'sending' | 'error',
   aiQuestion: '',
   aiShowToolPicker: false,
-  aiOverlay: null as 'mcp-setup' | 'mcp-done' | 'response' | 'launched' | null,
+  aiOverlay: null as 'mcp-setup' | 'mcp-existing' | 'mcp-conflict' | 'mcp-done' | 'response' | 'launched' | null,
   aiMcpConfiguring: false,
+  aiMcpSetupScope: 'project' as 'project' | 'global',          // NEW — which radio is selected
+  aiMcpDoneScope: null as 'project' | 'global' | null,         // NEW — which scope was just written (for the toast)
   aiResponse: null as { content: string; toolCalls?: Array<{ name: string }>; durationMs?: number } | null,
   aiError: null as string | null,
+
+  // Env var onboarding state
+  envDetection: null as { allPresent: boolean; baseUrl: string | null; apiKey: string | null; accountId: string | null } | null,
+  envDisclosureOpen: false as boolean, // false → Panel D, true → Panel E
+  envOnboardingChoice: 'env' as 'env' | 'pat', // which choice card is selected in Panel A
+  authSource: 'pat' as 'pat' | 'env', // from settings - determines if we wait for env vars
 };
 
 // ── Dynamic page size calculation ──────────────────────────────────────────
@@ -415,19 +424,27 @@ window.addEventListener('message', ({ data: msg }) => {
   switch (msg.type) {
 
     case 'GIT_CONTEXT':
+      console.log('[Webview] GIT_CONTEXT received:', { org: msg.org, project: msg.project, currentOrg: state.org, currentProject: state.project });
       state.gitCtx = msg.ctx;
       state.shaMismatch = null;
       // GIT_CONTEXT means we have config (org/project) - mark as configured
       state.configured = true;
+      // Update authSource from settings if provided
+      if (msg.authSource) {
+        state.authSource = msg.authSource as 'pat' | 'env';
+      }
       // Only consider it "changed" if we had a previous value AND it differs
       // (Don't treat initial set as a change)
       const orgChanged = state.org && msg.org && msg.org !== state.org;
       const projectChanged = state.project && msg.project && msg.project !== state.project;
+      const wasEmptyOrgProject = !state.org || !state.project;
       if (msg.org)     state.org     = msg.org;
       if (msg.project) state.project = msg.project;
 
       // Initialize pinned view and default view mode from settings (only once on first load)
-      if (!state.viewModeInitialized) {
+      // OR if we just got org/project for the first time (env var onboarding)
+      if (!state.viewModeInitialized || wasEmptyOrgProject) {
+        console.log('[Webview] Initializing view mode:', { wasEmptyOrgProject, viewModeInitialized: state.viewModeInitialized });
         // Handle both old ('thisCommit'/'allExecutions') and new ('pipelines'/'executions') setting values
         const defaultView = msg.defaultView ?? 'pipelines';
         const normalizedView =
@@ -440,6 +457,7 @@ window.addEventListener('message', ({ data: msg }) => {
         state.viewModeInitialized = true;
 
         // Fetch data for initial view
+        console.log('[Webview] Fetching data for view:', state.viewMode);
         if (state.viewMode === 'executions') {
           state.loadingExecution = true;
           vscode.postMessage({ type: 'fetchHistory', page: 0, filter: state.historyFilter, pageSize: state.historyPageSize, pipelineId: state.filteredPipelineId });
@@ -481,27 +499,37 @@ window.addEventListener('message', ({ data: msg }) => {
         state.aiChatEnabled = msg.aiChatEnabled;
         console.log('[Webview] AI chat enabled:', state.aiChatEnabled);
       }
-      applyEffectiveTheme();
 
-      // If org/project changed, reset history/detail state
+      // If org/project changed, clear state and refetch data
       if (orgChanged || projectChanged) {
+        console.log('[Webview] Org/project changed, refetching data');
         state.historyPage = 0;
         state.historyList = [];
         state.historyTotal = 0;
+        state.detailExecId = null;
         state.executions.clear();
+        state.pipelineList = [];
 
-        // If viewing detail, go back to history list
-        if (state.viewMode === 'detail') {
-          state.viewMode = 'executions';
-          state.detailExecId = null;
-        }
-
-        // If on history tab, fetch immediately
+        // Fetch fresh data for current view
         if (state.viewMode === 'executions') {
-          state.loadingExecution = true; // Show loading state while fetching
+          state.loadingExecution = true;
           vscode.postMessage({ type: 'fetchHistory', page: 0, filter: state.historyFilter, pageSize: state.historyPageSize, pipelineId: state.filteredPipelineId });
+        } else if (state.viewMode === 'pipelines') {
+          state.loadingPipelines = true;
+          vscode.postMessage({ type: 'fetchPipelines' });
         }
       }
+      break;
+
+    case 'envDetection':
+      state.envDetection = msg.envDetection;
+      if (msg.authSource) {
+        state.authSource = msg.authSource as 'pat' | 'env';
+      }
+      state.initializing = false; // Mark initialization complete
+      console.log('[Webview] envDetection received:', { envDetection: state.envDetection, authSource: state.authSource });
+      scheduleRender(true);
+      applyEffectiveTheme();
       break;
 
     case 'EXECUTION_UPDATE': {
@@ -894,18 +922,47 @@ window.addEventListener('message', ({ data: msg }) => {
       break;
 
     case 'STATE_UPDATE':
-      state.aiDetection = msg.aiDetection;
-      // Determine AI state from detection result
-      if (!msg.aiDetection) {
-        state.aiState = 'detecting';
-      } else if (msg.aiDetection.tools.length === 0) {
-        state.aiState = 'none';
-      } else if (!msg.aiDetection.tools.some(t => t.mcpReady)) {
-        state.aiState = 'unconfigured';
-      } else {
-        state.aiState = 'ready';
+      console.log('[Webview] STATE_UPDATE received:', msg);
+      // Handle configured state update
+      if (msg.configured !== undefined) {
+        const wasConfigured = state.configured;
+        state.configured = msg.configured;
+        console.log('[Webview] Configured state:', { wasConfigured, nowConfigured: state.configured });
+
+        // If we just became configured, initialize the view and fetch data
+        if (!wasConfigured && msg.configured) {
+          console.log('[Webview] Just became configured - initializing view');
+          // Initialize view mode if not done yet
+          if (!state.viewModeInitialized) {
+            state.pinnedView = 'pipelines';
+            state.viewMode = 'pipelines';
+            state.viewModeInitialized = true;
+          }
+          // Fetch data for current view
+          if (state.viewMode === 'executions') {
+            state.loadingExecution = true;
+            vscode.postMessage({ type: 'fetchHistory', page: 0, filter: state.historyFilter, pageSize: state.historyPageSize, pipelineId: state.filteredPipelineId });
+          } else if (state.viewMode === 'pipelines') {
+            state.loadingPipelines = true;
+            vscode.postMessage({ type: 'fetchPipelines' });
+          }
+        }
       }
-      scheduleRender(true); // Force immediate render for AI state changes
+      // Handle AI detection state update
+      if (msg.aiDetection !== undefined) {
+        state.aiDetection = msg.aiDetection;
+        // Determine AI state from detection result
+        if (!msg.aiDetection) {
+          state.aiState = 'detecting';
+        } else if (msg.aiDetection.tools.length === 0) {
+          state.aiState = 'none';
+        } else if (!msg.aiDetection.tools.some(t => t.mcpReady)) {
+          state.aiState = 'unconfigured';
+        } else {
+          state.aiState = 'ready';
+        }
+      }
+      scheduleRender(true); // Force immediate render for state changes
       return; // Skip the scheduleRender at the end
 
     case 'AI_RESPONSE':
@@ -931,6 +988,7 @@ window.addEventListener('message', ({ data: msg }) => {
       state.aiState = 'ready';
       state.aiOverlay = 'mcp-done';
       state.aiMcpConfiguring = false;
+      state.aiMcpDoneScope = (msg as any).scope || null;
       scheduleRender(true); // Force immediate render
       return; // Skip the scheduleRender at the end
 
@@ -1380,7 +1438,26 @@ function render(): void {
 }
 
 function build(): string {
-  if (!state.configured) return notConfigured();
+  // Show loading spinner during initialization
+  if (state.initializing) {
+    return `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;color:var(--fg-2);font-size:11px">
+      <span class="spinner" style="font-size:20px">⟳</span>
+      <span>Loading...</span>
+    </div>`;
+  }
+
+  // Show onboarding if not configured OR if we don't have org/project yet
+  // BUT: if authSource='env', don't flash onboarding screen while waiting for config
+  if (!state.configured || !state.org || !state.project) {
+    // If using env vars and we're just waiting for config, show loading instead
+    if (state.authSource === 'env' && state.envDetection?.allPresent) {
+      return `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;color:var(--fg-2);font-size:11px">
+        <span class="spinner" style="font-size:20px">⟳</span>
+        <span>Loading Harness workspace...</span>
+      </div>`;
+    }
+    return notConfigured();
+  }
 
   const parts: string[] = [];
 
@@ -1571,6 +1648,7 @@ const AI_TOOL_META: Record<string, { name: string; sub: string | null }> = {
   'claudecode-cli': { name: 'Claude Code', sub: 'CLI' },
   'claudecode-ext': { name: 'Claude Code', sub: 'Extension' },
   'cursor': { name: 'Cursor', sub: null },
+  'copilot': { name: 'GitHub Copilot', sub: null },
 };
 
 // Tool glyphs
@@ -1593,10 +1671,18 @@ function cursorGlyph(): string {
   </svg>`;
 }
 
+function copilotGlyph(): string {
+  // GitHub Copilot logo (GitHub mark)
+  return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z" fill="currentColor"/>
+  </svg>`;
+}
+
 function getAIToolGlyph(toolId: string): string {
   if (toolId === 'claudecode-cli') return claudeCliGlyph();
   if (toolId === 'claudecode-ext') return claudeExtGlyph();
   if (toolId === 'cursor') return cursorGlyph();
+  if (toolId === 'copilot') return copilotGlyph();
   return '';
 }
 
@@ -1623,6 +1709,18 @@ function closeIcon(): string {
 
 function externalIcon(): string {
   return `<svg width="11" height="11" viewBox="0 0 12 12"><path d="M3 3 L7 3 L7 7 M7 3 L3 7" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+function folderIcon(): string {
+  return `<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 4 L1.5 11 Q1.5 11.8 2.3 11.8 L11.7 11.8 Q12.5 11.8 12.5 11 L12.5 5.5 Q12.5 4.7 11.7 4.7 L6.8 4.7 L5.6 3.3 Q5.2 2.8 4.5 2.8 L2.3 2.8 Q1.5 2.8 1.5 3.6 Z" stroke="currentColor" stroke-width="1.1" fill="none" stroke-linejoin="round"/></svg>`;
+}
+
+function homeIcon(): string {
+  return `<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.8 6.5 L7 2 L12.2 6.5 L12.2 11.5 Q12.2 12 11.7 12 L8.8 12 L8.8 8.8 L5.2 8.8 L5.2 12 L2.3 12 Q1.8 12 1.8 11.5 Z" stroke="currentColor" stroke-width="1.1" fill="none" stroke-linejoin="round"/></svg>`;
+}
+
+function infoIcon(): string {
+  return `<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M6 5.4 L6 8.2 M6 3.8 L6 4.0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`;
 }
 
 function statusDot(dotState: 'ok' | 'warn' | 'err' | 'pulse'): string {
@@ -1667,8 +1765,30 @@ function renderAIToolPicker(): string {
   return `<div class="aix-picker"><div class="aix-picker-head">Choose AI tool</div>${items}</div>`;
 }
 
+/**
+ * Get MCP config path display for a given tool and scope
+ */
+function getMcpPathDisplay(toolId: string, scope: 'project' | 'global'): string {
+  if (toolId === 'copilot') {
+    if (scope === 'project') {
+      return '<workspace>/.vscode/mcp.json';
+    }
+    // Global paths are OS-specific for Copilot
+    if (navigator.platform.toLowerCase().includes('win')) {
+      return '%APPDATA%\\Code\\User\\mcp.json';
+    } else if (navigator.platform.toLowerCase().includes('mac')) {
+      return '~/Library/Application Support/Code/User/mcp.json';
+    } else {
+      return '~/.config/Code/User/mcp.json';
+    }
+  }
+
+  // Claude Code (CLI and Extension)
+  return scope === 'project' ? '<workspace>/.mcp.json' : '~/.claude.json';
+}
+
 function renderAIMCPCard(): string {
-  if (state.aiOverlay !== 'mcp-setup' && state.aiOverlay !== 'mcp-done') return '';
+  if (state.aiOverlay !== 'mcp-setup' && state.aiOverlay !== 'mcp-done' && state.aiOverlay !== 'mcp-existing' && state.aiOverlay !== 'mcp-conflict') return '';
   const activeTool = state.aiDetection?.activeTool;
   if (!activeTool) return '';
 
@@ -1679,12 +1799,39 @@ function renderAIMCPCard(): string {
 
   const meta = AI_TOOL_META[activeTool];
   const glyph = getAIToolGlyph(activeTool);
-  if (state.aiOverlay === 'mcp-done') {
-    return `<div class="aix-overlay aix-overlay-done"><span class="aix-overlay-check">${checkIcon()}</span><div class="aix-overlay-done-text"><strong>Harness MCP configured for ${esc(meta.name)}.</strong><span>Restart ${esc(meta.name)} to activate.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div>`;
+
+  // Existing config card
+  if (state.aiOverlay === 'mcp-existing') {
+    const scope = state.aiDetection?.mcpScope;
+    if (!scope || !scope.activeScope) return '';
+    const scopeInfo = scope.activeScope === 'project' ? scope.project : scope.global;
+    if (!scopeInfo) return '';
+    return `<div class="aix-overlay aix-overlay-existing"><div class="aix-existing-hdr"><span class="aix-existing-check">${checkIcon()}</span><div class="aix-existing-title"><strong>Harness MCP is already configured</strong><span>You're all set to use ${esc(meta.name)} with Harness.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-existing-where"><span class="aix-scope-chip is-${scope.activeScope}"><span class="aix-scope-chip-ico">${scope.activeScope === 'project' ? folderIcon() : homeIcon()}</span>${scope.activeScope}</span><code class="aix-existing-path">${esc(scopeInfo.path)}</code><button type="button" class="aix-existing-open" data-action="openMCPConfig" data-scope="${scope.activeScope}">Open</button></div><div class="aix-setup-acts"><button type="button" class="aix-btn-ghost" data-action="closeAIMCPCard">Got it</button></div></div>`;
   }
+
+  // Conflict card
+  if (state.aiOverlay === 'mcp-conflict') {
+    const scope = state.aiDetection?.mcpScope;
+    if (!scope || !scope.conflict) return '';
+    return `<div class="aix-overlay aix-overlay-conflict"><div class="aix-existing-hdr"><span class="aix-existing-warn">${warnIcon()}</span><div class="aix-existing-title"><strong>Harness MCP configured in both scopes</strong><span>Project scope takes precedence. Global config is ignored.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-conflict-list"><div class="aix-conflict-row is-active"><span class="aix-scope-chip is-project"><span class="aix-scope-chip-ico">${folderIcon()}</span>project</span><code class="aix-existing-path">${esc(scope.project!.path)}</code><span class="aix-conflict-tag is-active">in use</span><button type="button" class="aix-conflict-open" data-action="openMCPConfig" data-scope="project">Open</button></div><div class="aix-conflict-row is-shadowed"><span class="aix-scope-chip is-global"><span class="aix-scope-chip-ico">${homeIcon()}</span>global</span><code class="aix-existing-path">${esc(scope.global.path)}</code><span class="aix-conflict-tag">ignored</span><button type="button" class="aix-conflict-open" data-action="openMCPConfig" data-scope="global">Open</button></div></div><div class="aix-conflict-foot"><span>${infoIcon()} To switch scopes, remove one config and run setup again.</span><button type="button" class="aix-btn-ghost is-small" data-action="closeAIMCPCard">Got it</button></div></div>`;
+  }
+
+  // Done toast
+  if (state.aiOverlay === 'mcp-done') {
+    const doneScope = state.aiMcpDoneScope || 'global';
+    const pathDisplay = getMcpPathDisplay(activeTool, doneScope);
+    return `<div class="aix-overlay aix-overlay-done"><span class="aix-overlay-check">${checkIcon()}</span><div class="aix-overlay-done-text"><strong>Harness MCP configured for ${esc(meta.name)}.</strong><span>Wrote <code class="mono">${esc(pathDisplay)}</code> · restart ${esc(meta.name)} to activate.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div>`;
+  }
+
+  // Setup card with scope picker
   const busyClass = state.aiMcpConfiguring ? 'is-busy' : '';
-  const busyContent = state.aiMcpConfiguring ? `<span class="aix-send-spin"></span> Configuring…` : 'Configure automatically';
-  return `<div class="aix-overlay aix-overlay-setup"><div class="aix-setup-hdr"><span class="aix-setup-glyph">${glyph}</span><div class="aix-setup-title"><strong>Configure Harness MCP</strong><span>Lets ${esc(meta.name)} fetch pipeline data, logs &amp; executions.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-setup-meta"><div class="aix-setup-row"><span class="aix-setup-k">Writes to</span><code class="aix-setup-v mono">~/.claude.json</code></div><div class="aix-setup-row"><span class="aix-setup-k">Auth</span><span class="aix-setup-v">Uses your stored Harness PAT</span></div></div><div class="aix-setup-acts"><button type="button" class="aix-btn-primary ${busyClass}" data-action="configureAIMCP" ${state.aiMcpConfiguring ? 'disabled' : ''}>${busyContent}</button><button type="button" class="aix-btn-ghost" data-action="closeAIMCPCard">Not now</button></div></div>`;
+  const busyContent = state.aiMcpConfiguring ? `<span class="aix-send-spin"></span> Configuring…` : (state.aiMcpSetupScope === 'project' ? 'Configure for this project' : 'Configure globally');
+  const writesTo = getMcpPathDisplay(activeTool, state.aiMcpSetupScope || 'global');
+  const tipText = state.aiMcpSetupScope === 'project'
+    ? (activeTool === 'copilot' ? 'Lives in .vscode/ folder.' : 'Lives in your workspace root.')
+    : 'Lives in your home folder. Only you use it; applies to every project you open.';
+
+  return `<div class="aix-overlay aix-overlay-setup"><div class="aix-setup-hdr"><span class="aix-setup-glyph">${glyph}</span><div class="aix-setup-title"><strong>Configure Harness MCP</strong><span>Lets ${esc(meta.name)} fetch pipeline data, logs &amp; executions.</span></div><button type="button" class="aix-overlay-x" data-action="closeAIMCPCard" aria-label="Dismiss">${closeIcon()}</button></div><div class="aix-scope-label-row"><span class="aix-setup-k">Where</span></div><div class="aix-scope"><button type="button" class="aix-scope-opt ${state.aiMcpSetupScope === 'project' ? 'on' : ''}" data-action="setMCPScope" data-scope="project"><span class="aix-scope-ico">${folderIcon()}</span><span class="aix-scope-text"><strong>This project</strong><span>shared with teammates if committed</span></span><span class="aix-scope-radio" aria-hidden></span></button><button type="button" class="aix-scope-opt ${state.aiMcpSetupScope === 'global' ? 'on' : ''}" data-action="setMCPScope" data-scope="global"><span class="aix-scope-ico">${homeIcon()}</span><span class="aix-scope-text"><strong>All my projects</strong><span>personal, every repo</span></span><span class="aix-scope-radio" aria-hidden></span></button></div><div class="aix-setup-meta"><div class="aix-setup-row"><span class="aix-setup-k">Writes to</span><code class="aix-setup-v mono">${esc(writesTo)}</code></div><div class="aix-setup-row"><span class="aix-setup-k">Auth</span><span class="aix-setup-v">Uses your stored Harness PAT</span></div></div><div class="aix-scope-tip"><span class="aix-scope-tip-ico">${infoIcon()}</span><span>${esc(tipText)}</span></div><div class="aix-setup-acts"><button type="button" class="aix-btn-primary ${busyClass}" data-action="configureAIMCP" ${state.aiMcpConfiguring ? 'disabled' : ''}>${busyContent}</button><button type="button" class="aix-btn-ghost" data-action="closeAIMCPCard">Not now</button></div></div>`;
 }
 
 function renderAIResponse(): string {
@@ -1848,7 +1995,8 @@ function aiFooter(): string {
     const s = statusLines[effectiveState];
     const linkAction = effectiveState === 'cursor-no-plugin' ? 'cursorInstallPlugin' : effectiveState === 'cursor-oauth-pending' ? 'cursorConnectOAuth' : effectiveState === 'unconfigured' ? 'showAIMCPSetup' : 'retryAI';
     const linkHtml = s.link ? `<button type="button" class="aix-status-link ${effectiveState === 'unconfigured' || effectiveState === 'cursor-no-plugin' || effectiveState === 'cursor-oauth-pending' ? 'is-primary' : ''}" data-action="${linkAction}">${esc(s.link)}</button>` : '';
-    statusHtml = `<div class="aix-status">${statusDot(s.dot as any)}<span class="aix-status-txt">${esc(s.text)}</span>${linkHtml}</div>`;
+    const scopeChip = (effectiveState === 'ready' && detection?.mcpScope?.activeScope) ? `<span class="aix-scope-tag is-${detection.mcpScope.activeScope}">${detection.mcpScope.activeScope === 'project' ? folderIcon() : homeIcon()}${detection.mcpScope.activeScope}</span>` : '';
+    statusHtml = `<div class="aix-status">${statusDot(s.dot as any)}<span class="aix-status-txt">${esc(s.text)}</span>${scopeChip}${linkHtml}</div>`;
   }
   return `<div class="aix aix-${effectiveState}">${renderAIToolPicker()}${renderAIMCPCard()}${renderAIResponse()}${renderAILaunched()}<div class="aix-bar">${badgeHtml}<input class="aix-inp" placeholder="${esc(placeholders[effectiveState])}" value="${esc(question)}" ${inputDisabled ? 'disabled' : ''} data-action="aiInput"/><button type="button" class="aix-send" ${sendDisabled ? 'disabled' : ''} data-action="sendAI">${sendContent}</button></div>${statusHtml}</div>`;
 }
@@ -3253,6 +3401,112 @@ function opaRow(ex: ExecState): string {
 }
 
 function notConfigured(): string {
+  // If env vars are all present, show Panel A (choice between env vs manual)
+  if (state.envDetection?.allPresent) {
+    return renderPanelA();
+  }
+
+  // If disclosure is open, show Panel E (instructions)
+  if (state.envDisclosureOpen) {
+    return renderPanelE();
+  }
+
+  // Otherwise, show Panel D (existing setup screen) with disclosure link
+  return renderPanelD();
+}
+
+function renderPanelA(): string {
+  const isEnv = state.envOnboardingChoice === 'env';
+  const isPat = state.envOnboardingChoice === 'pat';
+  const buttonLabel = isEnv ? 'Connect with env vars' : 'Start setup';
+  const buttonAction = isEnv ? 'connectWithEnv' : 'configure';
+
+  return `<div class="onboarding-empty">
+    <!-- Title row with logo tile -->
+    <div style="display:flex;gap:10px;margin-bottom:14px;align-items:flex-start">
+      <div style="width:38px;height:38px;border-radius:10px;background:var(--accent-soft);border:1px solid var(--accent-ring);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg width="22" height="22" viewBox="0 0 124 124" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M103.948 42.1496L75.6373 13.6339C72.2845 10.4453 68.291 8.01733 63.9263 6.51369C54.2541 3.27405 44.6282 5.80282 36.8325 13.6339L8.45273 42.1496C5.28327 45.5226 2.86981 49.5401 1.37519 53.9313C-1.85662 63.662 0.657009 73.3457 8.45273 81.1768L36.7977 109.693C40.1449 112.882 44.135 115.311 48.4971 116.813C51.1397 117.712 53.9086 118.176 56.6981 118.188C63.4976 118.188 70.0076 115.298 75.5909 109.693L103.924 81.1768C107.098 77.8053 109.515 73.7875 111.013 69.3954C114.234 59.6647 111.72 49.9926 103.924 42.1496H103.948ZM58.3777 21.9078C60.5191 22.5984 62.4922 23.734 64.1695 25.2407L72.5443 33.6777L56.2117 50.0972L39.8788 33.6661L48.3 25.1824C50.5588 22.9217 53.7442 20.5211 58.4009 21.8961L58.3777 21.9078ZM16.7002 59.4551C17.3889 57.2992 18.5217 55.314 20.0247 53.6284L28.3996 45.203L44.7323 61.6342L28.388 78.0654L19.9668 69.5818C17.708 67.321 15.3334 64.1163 16.6886 59.4317L16.7002 59.4551ZM54.0225 101.384C51.8784 100.699 49.9039 99.5633 48.2307 98.051L39.8788 89.719L56.2117 73.2759L72.5443 89.7071L64.1231 98.191C61.8643 100.452 58.6905 102.852 54.0225 101.477V101.384ZM95.7231 63.9183C95.0346 66.0715 93.9061 68.0565 92.4102 69.745L84.0353 78.0654L67.7024 61.6342L84.0353 45.203L92.4565 53.675C94.7153 55.9356 97.09 59.1403 95.7347 63.8249" fill="#00ADE4"/>
+        </svg>
+      </div>
+      <div style="display:flex;flex-direction:column">
+        <div style="font-size:13px;font-weight:600;color:var(--fg-0);line-height:1.3">Connect to Harness</div>
+        <div style="font-size:11px;color:var(--fg-2);line-height:1.3">How would you like to sign in?</div>
+      </div>
+    </div>
+
+    <!-- Detected banner -->
+    <div style="padding:9px 11px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);margin-bottom:14px;font-size:11px;line-height:1.5;color:var(--fg-1)">
+      <strong style="color:var(--fg-0)">Environment variables detected.</strong> We can use them directly — nothing gets stored or copied.
+    </div>
+
+    <!-- Choice card 1 (env) -->
+    <div data-action="selectEnvChoice" data-choice="env" style="border:1px solid ${isEnv ? 'var(--accent)' : 'var(--line)'};background:${isEnv ? 'var(--accent-soft)' : 'var(--bg-2)'};border-radius:var(--r-lg);padding:11px 12px;margin-bottom:10px;cursor:pointer;transition:all 100ms ease">
+      <div style="font-size:12px;font-weight:600;color:var(--fg-0);margin-bottom:2px">Use environment variables</div>
+      <div style="font-size:11px;color:var(--fg-2);line-height:1.45">Reads <code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 4px;border-radius:3px;color:var(--fg-2)">HARNESS_API_KEY</code>, <code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 4px;border-radius:3px;color:var(--fg-2)">HARNESS_BASE_URL</code> and <code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 4px;border-radius:3px;color:var(--fg-2)">HARNESS_ACCOUNT_ID</code> from your shell.</div>
+    </div>
+
+    <!-- Choice card 2 (manual) -->
+    <div data-action="selectEnvChoice" data-choice="pat" style="border:1px solid ${isPat ? 'var(--accent)' : 'var(--line)'};background:${isPat ? 'var(--accent-soft)' : 'var(--bg-2)'};border-radius:var(--r-lg);padding:11px 12px;margin-bottom:14px;cursor:pointer;transition:all 100ms ease">
+      <div style="font-size:12px;font-weight:600;color:var(--fg-0);margin-bottom:2px">Set up manually</div>
+      <div style="font-size:11px;color:var(--fg-2);line-height:1.45">Enter a Personal Access Token and Account ID. Stored in IDE secret storage.</div>
+    </div>
+
+    <!-- Primary button -->
+    <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer;margin-bottom:12px" data-action="${buttonAction}" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">${buttonLabel}</button>
+
+    <!-- Switch-later hint -->
+    <div style="font-size:10.5px;color:var(--fg-2);text-align:center;line-height:1.5">
+      You can switch later via <code style="font-family:var(--font-mono);color:var(--fg-2)">Harness: Configure Access</code>.
+    </div>
+  </div>`;
+}
+
+function renderPanelE(): string {
+  const hasVars = state.envDetection?.allPresent ?? false;
+  const statusText = hasVars
+    ? '<strong style="color:var(--fg-0)">All detected.</strong> Click Connect below to proceed.'
+    : '<strong style="color:var(--fg-0)">None detected yet.</strong> After exporting, click reload below — or run <code style="font-family:var(--font-mono);color:var(--accent)">Developer: Reload Window</code>.';
+
+  return `<div class="onboarding-empty">
+    <!-- Back link -->
+    <div style="margin-bottom:14px">
+      <a href="#" data-action="closeEnvDisclosure" style="font-size:11px;color:var(--accent);text-decoration:none;cursor:pointer">← Back</a>
+    </div>
+
+    <!-- Heading -->
+    <div style="font-size:13px;font-weight:600;color:var(--fg-0);margin-bottom:10px">Use <code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 5px;border-radius:3px;color:var(--fg-2);font-size:12px">HARNESS_*</code> environment variables</div>
+
+    <!-- Intro -->
+    <div style="font-size:11.5px;color:var(--fg-2);line-height:1.55;margin-bottom:14px">
+      The Harness Extension supports these three variables. Set them in your shell profile, then reload the IDE window and we'll pick them up automatically.
+    </div>
+
+    <!-- Code block -->
+    <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-lg);padding:11px 12px;margin-bottom:12px;font-family:var(--font-mono);font-size:10.5px;color:var(--fg-1);line-height:1.7;position:relative">
+      <div>export HARNESS_BASE_URL=https://app.harness.io</div>
+      <div>export HARNESS_API_KEY=pat.xxxxx</div>
+      <div>export HARNESS_ACCOUNT_ID=xxxxx</div>
+      <button data-action="copyEnvVars" style="position:absolute;top:8px;right:8px;padding:4px 8px;background:var(--bg-3);border:1px solid var(--line);border-radius:4px;font-family:var(--font-sans);font-size:10px;font-weight:500;color:var(--fg-1);cursor:pointer" onmouseover="this.style.background='var(--bg-4)'" onmouseout="this.style.background='var(--bg-3)'">Copy</button>
+    </div>
+
+    <!-- Status block -->
+    <div style="padding:9px 11px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);margin-bottom:12px;font-size:11px;line-height:1.5;color:var(--fg-1)">
+      ${statusText}
+    </div>
+
+    <!-- Reload button -->
+    <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer;margin-bottom:14px" data-action="reloadWindowEnv" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">Reload window and re-check</button>
+
+    <!-- About card -->
+    <div style="padding:10px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;gap:4px">
+      <div style="font-size:11px;font-weight:600;color:var(--fg-0)">About env vars</div>
+      <div style="font-size:10.5px;color:var(--fg-2);line-height:1.5">Vars are read once per session and never written to disk. The PAT setup path stores your token in IDE secret storage — both are equally secure, just different lifetimes.</div>
+    </div>
+  </div>`;
+}
+
+function renderPanelD(): string {
   // Shield icon for footnote (11x11)
   const shieldIcon = `<svg width="11" height="11" viewBox="0 0 12 12" style="flex-shrink:0;margin-top:1px">
     <path d="M6 1.5 L10 3 L10 6.2 Q10 9 6 10.5 Q2 9 2 6.2 L2 3 Z"
@@ -3307,10 +3561,17 @@ function notConfigured(): string {
     </div>
 
     <!-- Primary button -->
-    <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer" data-action="configure" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">Start setup</button>
+    <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer;margin-bottom:14px" data-action="configure" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">Start setup</button>
+
+    <!-- Env disclosure link -->
+    <div style="text-align:center;margin-bottom:18px">
+      <a href="#" data-action="openEnvDisclosure" style="font-size:10.5px;color:var(--fg-2);text-decoration:none;cursor:pointer">
+        Already have <code style="font-family:var(--font-mono);color:var(--fg-2)">HARNESS_*</code> env vars?
+      </a>
+    </div>
 
     <!-- Footnote card -->
-    <div style="margin-top:18px;padding:10px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);display:flex;gap:8px;align-items:flex-start">
+    <div style="padding:10px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);display:flex;gap:8px;align-items:flex-start">
       <div style="color:var(--accent)">${shieldIcon}</div>
       <div style="font-size:10.5px;color:var(--fg-2);line-height:1.5">Your personal access token is stored in VS Code secret storage — never written to settings.</div>
     </div>
@@ -3912,12 +4173,27 @@ function bind(): void {
       e.stopPropagation();
       state.aiOverlay = null;
       scheduleRender(true);
+    } else if (action === 'setMCPScope') {
+      e.preventDefault();
+      e.stopPropagation();
+      const scope = (e.target as HTMLElement).closest('[data-scope]')?.getAttribute('data-scope') as 'project' | 'global';
+      if (scope) {
+        state.aiMcpSetupScope = scope;
+        scheduleRender(true);
+      }
     } else if (action === 'configureAIMCP') {
       e.preventDefault();
       e.stopPropagation();
       state.aiMcpConfiguring = true;
       scheduleRender(true);
-      vscode.postMessage({ type: 'AI_CONFIGURE_MCP' });
+      vscode.postMessage({ type: 'AI_CONFIGURE_MCP', scope: state.aiMcpSetupScope });
+    } else if (action === 'openMCPConfig') {
+      e.preventDefault();
+      e.stopPropagation();
+      const scope = (e.target as HTMLElement).closest('[data-scope]')?.getAttribute('data-scope') as 'project' | 'global';
+      if (scope) {
+        vscode.postMessage({ type: 'AI_OPEN_MCP_CONFIG', scope });
+      }
     } else if (action === 'closeAIOverlay') {
       e.preventDefault();
       e.stopPropagation();
@@ -3956,6 +4232,39 @@ function bind(): void {
       e.preventDefault();
       e.stopPropagation();
       vscode.postMessage({ type: 'AI_CURSOR_CONNECT_OAUTH' });
+    } else if (action === 'openEnvDisclosure') {
+      e.preventDefault();
+      e.stopPropagation();
+      state.envDisclosureOpen = true;
+      scheduleRender(true);
+    } else if (action === 'closeEnvDisclosure') {
+      e.preventDefault();
+      e.stopPropagation();
+      state.envDisclosureOpen = false;
+      scheduleRender(true);
+    } else if (action === 'selectEnvChoice') {
+      e.preventDefault();
+      e.stopPropagation();
+      const choice = (e.target as HTMLElement).closest('[data-choice]')?.getAttribute('data-choice') as 'env' | 'pat';
+      if (choice) {
+        state.envOnboardingChoice = choice;
+        scheduleRender(true);
+      }
+    } else if (action === 'connectWithEnv') {
+      e.preventDefault();
+      e.stopPropagation();
+      vscode.postMessage({ type: 'startEnvVarOnboarding' });
+    } else if (action === 'reloadWindowEnv') {
+      e.preventDefault();
+      e.stopPropagation();
+      vscode.postMessage({ type: 'command', command: 'workbench.action.reloadWindow' });
+    } else if (action === 'copyEnvVars') {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = `export HARNESS_BASE_URL=https://app.harness.io
+export HARNESS_API_KEY=pat.xxxxx
+export HARNESS_ACCOUNT_ID=xxxxx`;
+      navigator.clipboard.writeText(text);
     }
   });
 

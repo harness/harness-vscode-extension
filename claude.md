@@ -1,6 +1,6 @@
 # Harness VS Code Extension — Context & Requirements
 
-> Last updated: 2026-05-08
+> Last updated: 2026-05-21
 
 ---
 
@@ -21,8 +21,9 @@ A VS Code sidebar extension that surfaces Harness pipeline execution (CI, CD, ST
 | File | Role |
 |------|------|
 | `src/extension.ts` | Activation, command registration, poller wiring |
-| `src/config/configManager.ts` | Reads/writes PAT + identifiers; global vs workspace config |
-| `src/auth/onboarding.ts` | 2-phase onboarding: global (PAT+AccountID) → workspace (Org/Project) |
+| `src/config/configManager.ts` | Reads/writes PAT + identifiers; global vs workspace config; env var fallback |
+| `src/auth/onboarding.ts` | 2-phase onboarding: global (PAT+AccountID) → workspace (Org/Project); env var flow |
+| `src/auth/envCredentials.ts` | Reads HARNESS_* environment variables for passwordless auth |
 | `src/api/harnessClient.ts` | Typed fetch wrapper, injects auth headers |
 | `src/api/logService.ts` | Log fetch (blob/download + stream fallback), ZIP parsing |
 | `src/api/approvalService.ts` | Submits approve/reject via API |
@@ -134,18 +135,37 @@ Implementation: `pipelinePoller.ts` tracks visibility and focus via callbacks.
 
 ## Onboarding
 
-**Two-phase setup:**
-1. **Global** (once): `Harness: Configure API Key`
-   - Base URL, PAT (stored in SecretStorage), Account ID
-2. **Project** (per workspace or global): `Harness: Select Org & Project`
-   - Org/Project dropdowns, stored globally or per-workspace
+**Authentication Methods:**
+
+1. **PAT (Personal Access Token)** — Traditional method
+   - Two-phase setup:
+     - **Global** (once): `Harness: Configure API Key` → Base URL, PAT (stored in SecretStorage), Account ID
+     - **Project** (per workspace or global): `Harness: Select Org & Project` → Org/Project dropdowns
+   - Settings: `harness.authSource = 'pat'`
+
+2. **Environment Variables** — Passwordless, CI/CD-friendly
+   - Set `HARNESS_API_KEY`, `HARNESS_BASE_URL`, `HARNESS_ACCOUNT_ID` before launching VS Code
+   - One-phase setup: Org/Project selection only (credentials read from env)
+   - Settings: `harness.authSource = 'env'`
+   - **Resolution order:** Environment variables → SecretStorage/Settings
 
 **First-run empty state:**
-- Beautiful setup UI (Variant B) shows 3-step preview
-- "Start setup" button launches onboarding
+- Auto-detects env vars on startup
+- Panel A: Choose "Connect with environment variables" or "Connect with Personal Access Token"
+- Panel D (env vars): Shows detected credentials, click "Connect" → Org/Project picker
+- Panel E (PAT): Traditional 3-step flow (Base URL → PAT → Account ID → Org/Project)
 - Auto-refreshes after completion (no reload needed)
 
-**Config resolution order:** Workspace settings → Global settings
+**Lifecycle Management:**
+- `Harness: Reset Auth Configuration` — Clears all credentials + org/project settings
+- `Harness: Select Org & Project` — Change org/project globally
+- `Harness: Switch Project (This Workspace)` — Override org/project for current workspace only
+
+**Config resolution order:** Environment variables → Workspace settings → Global settings
+
+**Workspace Safety:**
+- All workspace settings operations check if workspace is open first
+- Prevents "Unable to write to Workspace Settings" error when no workspace is open
 
 ---
 
@@ -181,7 +201,7 @@ FME flag `vscode-bar-experience`:
 
 ## AI Integration
 
-Supports **Claude Code** (CLI/Extension) and **Cursor AI** with automatic context injection via MCP.
+Supports **Claude Code** (CLI/Extension), **Cursor AI**, and **GitHub Copilot** with automatic context injection via MCP.
 
 ### Claude Code
 - **CLI mode**: Fully automated (spawns subprocess, response in sidebar)
@@ -193,10 +213,25 @@ Supports **Claude Code** (CLI/Extension) and **Cursor AI** with automatic contex
 - **Recommended**: Install [Harness Cursor Plugin](https://cursor.com/plugins) — OAuth, zero config
 - **Fallback**: Local MCP configuration (harness-mcp-v2)
 
+### GitHub Copilot
+- Auto-detected via VS Code extensions API (only in VS Code, not Cursor)
+- Opens Copilot Chat and auto-pastes prompt
+- Uses `"servers"` key in MCP config (Copilot-specific format)
+- Environment variable inheritance: When using env var auth, only org/project IDs in config (credentials inherited from VS Code process)
+
 **MCP Configuration:**
-- Writes to `~/.claude.json` (global + all project-specific)
+- **Claude Code**: `~/.claude.json` (global) or `<workspace>/.mcp.json` (project)
+- **Cursor**: 
+  - macOS/Linux: `~/.cursor/mcp.json`
+  - Windows: `%APPDATA%\Cursor\User\mcp.json`
+- **GitHub Copilot**:
+  - Project: `.vscode/mcp.json`
+  - Global (macOS): `~/Library/Application Support/Code/User/mcp.json`
+  - Global (Windows): `%APPDATA%\Code\User\mcp.json`
+  - Global (Linux): `~/.config/Code/User/mcp.json`
 - Preserves existing config, only updates Harness MCP fields
-- User must restart Claude Code/Cursor to activate
+- User must restart AI tool to activate
+- **Auth handling**: When `authSource === 'env'`, writes environment variable references (`${HARNESS_API_KEY}`); when `authSource === 'pat'`, writes actual credentials
 
 **Prompt Context:**
 - Pipeline name, status, execution ID
@@ -219,6 +254,9 @@ Supports **Claude Code** (CLI/Extension) and **Cursor AI** with automatic contex
 - `vscode-log-experience` — Log viewer mode (inline/expanded/drawer)
 - `vscode-bar-experience` — Theme (simple/enhanced)
 - `vscode-mcp-integration` — AI chat integration toggle
+  - **Default**: ON (enabled by default for fail-safe behavior)
+  - **'on'** or **'control'**: Enabled
+  - **'off'**: Disabled (only way to turn off AI bar)
 
 ---
 
@@ -227,6 +265,7 @@ Supports **Claude Code** (CLI/Extension) and **Cursor AI** with automatic contex
 **Global Settings:**
 - `harness.baseUrl` — Instance URL (default: `https://app.harness.io`)
 - `harness.accountIdentifier` — Account ID
+- `harness.authSource` — Authentication method (`pat` or `env`)
 - `harness.orgIdentifier` — Organization
 - `harness.projectIdentifier` — Project
 - `harness.pollingIntervalSeconds` — Polling frequency (default: 10s)
@@ -236,6 +275,12 @@ Supports **Claude Code** (CLI/Extension) and **Cursor AI** with automatic contex
 **Workspace Settings (optional overrides):**
 - `harness.orgIdentifier`
 - `harness.projectIdentifier`
+
+**Environment Variables (optional, passwordless auth):**
+- `HARNESS_API_KEY` — Personal Access Token
+- `HARNESS_BASE_URL` — Instance URL (e.g., `https://app.harness.io`)
+- `HARNESS_ACCOUNT_ID` — Account identifier
+- Must be set before launching VS Code (inherited from parent process)
 
 ---
 
