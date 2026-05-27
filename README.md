@@ -1,15 +1,8 @@
 # Harness for VS Code
 
-[![Visual Studio Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/harness.harness-vscode?style=flat-square&label=VS%20Code%20Marketplace&logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=harness.harness-vscode)
-[![Visual Studio Marketplace Installs](https://img.shields.io/visual-studio-marketplace/i/harness.harness-vscode?style=flat-square)](https://marketplace.visualstudio.com/items?itemName=harness.harness-vscode)
-[![GitHub License](https://img.shields.io/github/license/harness/harness-vscode-extension?style=flat-square)](LICENSE)
-
 **Monitor CI/CD pipelines, view logs, and manage approvals — all without leaving your IDE.**
 
 Bring Harness directly into VS Code. See real-time pipeline status, debug failures with syntax-highlighted logs, approve deployments, and get AI-powered insights — zero context switching required.
-
-<!-- TODO: Add hero screenshot here -->
-<!-- ![Harness Extension Overview](media/hero-screenshot.png) -->
 
 ---
 
@@ -18,29 +11,17 @@ Bring Harness directly into VS Code. See real-time pipeline status, debug failur
 ### 🚀 **Real-time Pipeline Monitoring**
 Watch your pipelines run with live status updates. Automatic git context detection shows executions for your current branch and commit.
 
-<!-- TODO: Add pipeline view screenshot -->
-<!-- ![Pipeline View](media/pipeline-view.png) -->
-
 ### 📝 **Syntax-Highlighted Logs**
 Click any step to open its logs in a dedicated editor tab with full syntax highlighting. Failed steps are instantly highlighted for quick debugging.
 
-<!-- TODO: Add logs screenshot -->
-<!-- ![Step Logs](media/logs-view.png) -->
-
 ### ✅ **One-Click Approvals**
 Handle Harness native, Jira, and ServiceNow approval gates directly in your editor. Permission checks happen automatically.
-
-<!-- TODO: Add approval screenshot -->
-<!-- ![Approval Flow](media/approval-view.png) -->
 
 ### 🔍 **Smart Search & Filtering**
 Browse all pipelines, filter by status, pin favorites, and explore execution history with pagination. Works with or without a git repository.
 
 ### 🤖 **AI-Powered Debugging**
 Ask Claude Code, GitHub Copilot, or Cursor AI about pipeline failures with automatic context injection. No copy-pasting needed.
-
-<!-- TODO: Add AI bar screenshot -->
-<!-- ![AI Integration](media/ai-bar.png) -->
 
 ---
 
@@ -67,9 +48,6 @@ code --install-extension harness.harness-vscode
    - Account ID is **automatically extracted** from your PAT ✨
 3. **Select project**: Choose your organization and project from the dropdowns
 4. **Done!** Your pipelines appear automatically
-
-<!-- TODO: Add setup walkthrough GIF -->
-<!-- ![Setup Walkthrough](media/setup-walkthrough.gif) -->
 
 ### Alternative: Environment Variable Authentication
 
