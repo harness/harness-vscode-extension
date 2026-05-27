@@ -2,16 +2,35 @@
   "name": "harness-vscode",
   "displayName": "Harness",
   "description": "Monitor Harness pipelines, view logs, and manage approvals directly in VS Code. Real-time CI/CD visibility without context switching.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "harness",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Visualization",
+    "Testing"
+  ],
+  "keywords": [
+    "harness",
+    "ci/cd",
+    "pipelines",
+    "devops",
+    "continuous integration",
+    "continuous deployment",
+    "logs",
+    "testing",
+    "approvals",
+    "monitoring"
   ],
   "icon": "icons/harness-icon.png",
+  "galleryBanner": {
+    "color": "#00ADE4",
+    "theme": "dark"
+  },
   "license": "MIT",
+  "qna": "https://github.com/harness/harness-vscode-extension/issues",
   "repository": {
     "type": "git",
     "url": "https://github.com/harness/harness-vscode-extension"
@@ -228,6 +247,7 @@
     ]
   },
   "scripts": {
+    "vscode:prepublish": "node esbuild.js",
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "vsce package"

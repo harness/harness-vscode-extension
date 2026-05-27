@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.7] - 2026-05-27
+
+### Fixed
+- **Authentication isolation**: Prevents credential conflicts when both environment variables and PAT are configured
+  - Added `getAuthSource()` validation that verifies env vars are present before using 'env' mode
+  - Strict isolation in `getConfig()`: 'env' mode uses ONLY environment variables, 'pat' mode uses ONLY secret store + settings
+  - No more fallback mixing between auth sources
+  - Fixes 401 "Token is not valid" error when environment variables from Account A interfere with PAT for Account B
+  - Added defensive token trimming in `SecretStore.getApiKey()` to handle whitespace issues
+
+### Changed
+- **Marketplace readiness**: Prepared extension for VS Code Marketplace publication
+  - Added keywords for discoverability (harness, ci/cd, pipelines, devops, continuous integration, continuous deployment, logs, testing, approvals, monitoring)
+  - Added categories: Other, Visualization, Testing
+  - Added gallery banner with Harness brand color (#00ADE4, dark theme)
+  - Added Q&A link pointing to GitHub issues
+  - Added `vscode:prepublish` script for automatic build before publishing
+  - Cleaned up README.md for marketplace audience (removed VSIX instructions)
+  - Created CONTRIBUTING.md with developer setup, build, and release instructions
+
 ## [0.1.6] - 2026-05-21
 
 ### Added

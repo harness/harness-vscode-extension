@@ -18,64 +18,36 @@ See pipeline status, investigate failures, and approve deployments right in your
 
 ## 🚀 Quick Start
 
-### For Users (Install from Release)
+### Installation
 
-1. Download the latest `.vsix` file from [Releases](https://github.com/harness/harness-vscode-extension/releases)
+1. Open VS Code
+2. Press `Ctrl+Shift+X` (Windows/Linux) or `Cmd+Shift+X` (Mac) to open Extensions
+3. Search for **"Harness"**
+4. Click **Install**
 
-2. **Install in VS Code**
-
-   **Option A: Using the UI**
-   - Open the Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`)
-   - Click the `...` menu at the top → **Install from VSIX...**
-   - Select the downloaded `.vsix` file
-   - Reload VS Code when prompted
-
-   **Option B: Using the CLI**
-   ```bash
-   code --install-extension harness-vscode-0.x.x.vsix
-   ```
-
-3. **Install in Cursor**
-
-   **Option A: Using the Command Palette (Easiest)**
-   - Open Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
-   - Type **Extensions: Install from VSIX...**
-   - Select the downloaded `.vsix` file
-   - Reload Cursor when prompted
-
-   **Option B: Drag and Drop**
-   - Open the Extensions panel (click the extensions icon in the left sidebar)
-   - Drag and drop the `.vsix` file directly into the Cursor Extensions panel
-   - Reload Cursor when prompted
-
-   **Option C: Using the CLI**
-   ```bash
-   cursor --install-extension harness-vscode-0.x.x.vsix
-   ```
-
-4. Run **Harness: Configure API Key** to get started
-
-### For Developers (Build from Source)
-
+Or install via command line:
 ```bash
-# Clone and install
-git clone https://github.com/harness/harness-vscode-extension
-cd harness-vscode-extension
-npm install
-
-# Build
-npm run compile
-
-# Run in VS Code
-# Press F5 to launch Extension Development Host
-
-# Package for distribution (optional)
-npm install -g @vscode/vsce  # Install packaging tool if you don't have it
-npm run package
-# Creates harness-vscode-0.x.x.vsix
+code --install-extension harness.harness-vscode
 ```
 
-**Requirements:** VS Code 1.85+, Node.js 18+
+### Setup
+
+1. Click the Harness icon in the Activity Bar (left sidebar)
+2. Run **Harness: Configure API Key** from the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+3. Enter your Harness instance URL (default: `https://app.harness.io`)
+4. Paste your [Personal Access Token](https://developer.harness.io/docs/platform/automation/api/add-and-manage-api-keys)
+5. Account ID is **automatically extracted** from your PAT
+6. Select your organization and project
+
+**Alternative: Environment Variable Auth** (passwordless, CI/CD-friendly)
+```bash
+export HARNESS_API_KEY="your-pat"
+export HARNESS_BASE_URL="https://app.harness.io"
+export HARNESS_ACCOUNT_ID="your-account-id"
+code .
+```
+
+**Requirements:** VS Code 1.85.0 or higher, active Harness account
 
 ---
 
@@ -239,6 +211,12 @@ Use **Harness: Switch Project (This Workspace)** to override org/project for spe
 ## 📝 Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes and version history.
+
+---
+
+## 🤝 Contributing
+
+Interested in contributing? See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, build instructions, and guidelines.
 
 ---
 
