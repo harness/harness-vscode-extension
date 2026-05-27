@@ -17,29 +17,64 @@ export interface HarnessConfig {
 export class ConfigManager {
   constructor(private readonly secretStore: SecretStore) {}
 
+  /**
+   * Determine which auth source to use, validating that it's properly configured
+   */
+  private getAuthSource(): 'env' | 'pat' {
+    const cfg = vscode.workspace.getConfiguration('harness');
+    const authSource = cfg.get<string>('authSource', 'pat');
+
+    if (authSource === 'env') {
+      const envCreds = readEnvCredentials();
+      if (envCreds.allPresent) {
+        return 'env';
+      }
+      logger.warn('ConfigManager', 'authSource is "env" but environment variables are missing, falling back to PAT');
+    }
+
+    return 'pat';
+  }
+
   async getConfig(): Promise<HarnessConfig | null> {
     const cfg = vscode.workspace.getConfiguration('harness');
+    const authSource = this.getAuthSource();
 
-    // Try env vars first, fall back to settings
-    const envCreds = readEnvCredentials();
-    const apiKey = envCreds.apiKey || await this.secretStore.getApiKey();
+    let apiKey: string | undefined;
+    let accountIdentifier: string;
+    let baseUrl: string;
+
+    if (authSource === 'env') {
+      // Strict env mode: use ONLY environment variables for credentials
+      const envCreds = readEnvCredentials();
+      apiKey = envCreds.apiKey || undefined;
+      accountIdentifier = envCreds.accountId || '';
+      baseUrl = envCreds.baseUrl || 'https://app.harness.io';
+
+      logger.debug('ConfigManager', 'Using environment variable credentials');
+    } else {
+      // Strict PAT mode: use ONLY secret store + settings for credentials
+      apiKey = await this.secretStore.getApiKey();
+      accountIdentifier = cfg.get<string>('accountIdentifier', '').trim();
+      baseUrl = cfg.get<string>('baseUrl', 'https://app.harness.io');
+
+      logger.debug('ConfigManager', 'Using PAT credentials from secret store');
+    }
+
     if (!apiKey) {
-      logger.debug('ConfigManager', 'No API key found in env or secret storage');
+      logger.debug('ConfigManager', 'No API key found for authSource:', authSource);
       return null;
     }
 
-    const accountIdentifier = envCreds.accountId || cfg.get<string>('accountIdentifier', '').trim();
     if (!accountIdentifier) {
-      logger.debug('ConfigManager', 'No account identifier found in env or settings');
+      logger.debug('ConfigManager', 'No account identifier found for authSource:', authSource);
       return null;
     }
 
-    const baseUrl = envCreds.baseUrl || cfg.get<string>('baseUrl', 'https://app.harness.io');
     const orgIdentifier = cfg.get<string>('orgIdentifier', 'default').trim();
     const projectIdentifier = cfg.get<string>('projectIdentifier', '').trim();
 
     logger.debug('ConfigManager', 'Config loaded:', {
-      source: envCreds.allPresent ? 'env vars' : 'settings',
+      authSource,
       accountIdentifier,
       orgIdentifier,
       projectIdentifier,

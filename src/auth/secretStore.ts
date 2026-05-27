@@ -6,7 +6,8 @@ export class SecretStore {
   constructor(private readonly secrets: vscode.SecretStorage) {}
 
   async getApiKey(): Promise<string | undefined> {
-    return this.secrets.get(SECRET_KEY);
+    const key = await this.secrets.get(SECRET_KEY);
+    return key?.trim() || undefined;
   }
 
   async setApiKey(key: string): Promise<void> {
