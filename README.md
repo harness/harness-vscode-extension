@@ -1,110 +1,112 @@
-# Harness VS Code Extension
+# Harness for VS Code
 
-**Monitor your CI/CD pipelines, view logs, and manage approvals — all without leaving your IDE.**
+**Monitor CI/CD pipelines, view logs, and manage approvals — all without leaving your IDE.**
 
-See pipeline status, investigate failures, and approve deployments right in your sidebar.
+Bring Harness directly into VS Code. See real-time pipeline status, debug failures with syntax-highlighted logs, approve deployments, and get AI-powered insights — zero context switching required.
 
 ---
 
 ## ✨ Features
 
-- 📊 **Real-time pipeline status** — See all your pipelines and executions
-- 📝 **Syntax-highlighted logs** — View step logs in editor tabs with full syntax highlighting
-- ✅ **Approve deployments** — Handle approval gates without leaving your editor
-- 🔍 **Search & filter** — Find pipelines and executions quickly
-- 🤖 **AI integration** — Ask Claude Code, GitHub Copilot, or Cursor AI about your pipeline failures (with automatic context)
+### 🚀 **Real-time Pipeline Monitoring**
+Watch your pipelines run with live status updates. Automatic git context detection shows executions for your current branch and commit.
+
+### 📝 **Syntax-Highlighted Logs**
+Click any step to open its logs in a dedicated editor tab with full syntax highlighting. Failed steps are instantly highlighted for quick debugging.
+
+### ✅ **One-Click Approvals**
+Handle Harness native, Jira, and ServiceNow approval gates directly in your editor. Permission checks happen automatically.
+
+### 🔍 **Smart Search & Filtering**
+Browse all pipelines, filter by status, pin favorites, and explore execution history with pagination. Works with or without a git repository.
+
+### 🤖 **AI-Powered Debugging**
+Ask Claude Code, GitHub Copilot, or Cursor AI about pipeline failures with automatic context injection. No copy-pasting needed.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Getting Started
 
-### For Users (Install from Release)
+### Installation
 
-1. Download the latest `.vsix` file from [Releases](https://github.com/harness/harness-vscode-extension/releases)
+**From VS Code Marketplace:**
+1. Open Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`)
+2. Search for **"Harness"**
+3. Click **Install**
 
-2. **Install in VS Code**
-
-   **Option A: Using the UI**
-   - Open the Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`)
-   - Click the `...` menu at the top → **Install from VSIX...**
-   - Select the downloaded `.vsix` file
-   - Reload VS Code when prompted
-
-   **Option B: Using the CLI**
-   ```bash
-   code --install-extension harness-vscode-0.x.x.vsix
-   ```
-
-3. **Install in Cursor**
-
-   **Option A: Using the Command Palette (Easiest)**
-   - Open Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
-   - Type **Extensions: Install from VSIX...**
-   - Select the downloaded `.vsix` file
-   - Reload Cursor when prompted
-
-   **Option B: Drag and Drop**
-   - Open the Extensions panel (click the extensions icon in the left sidebar)
-   - Drag and drop the `.vsix` file directly into the Cursor Extensions panel
-   - Reload Cursor when prompted
-
-   **Option C: Using the CLI**
-   ```bash
-   cursor --install-extension harness-vscode-0.x.x.vsix
-   ```
-
-4. Run **Harness: Configure API Key** to get started
-
-### For Developers (Build from Source)
-
+**From Command Line:**
 ```bash
-# Clone and install
-git clone https://github.com/harness/harness-vscode-extension
-cd harness-vscode-extension
-npm install
-
-# Build
-npm run compile
-
-# Run in VS Code
-# Press F5 to launch Extension Development Host
-
-# Package for distribution (optional)
-npm install -g @vscode/vsce  # Install packaging tool if you don't have it
-npm run package
-# Creates harness-vscode-0.x.x.vsix
+code --install-extension harness.harness-vscode
 ```
 
-**Requirements:** VS Code 1.85+, Node.js 18+
+### Quick Setup (2 minutes)
+
+1. **Open Harness panel**: Click the Harness icon in the Activity Bar (left sidebar)
+2. **Configure credentials**: Run command **"Harness: Configure API Key"**
+   - Enter your Harness instance URL (or keep default: `https://app.harness.io`)
+   - Paste your [Personal Access Token](https://developer.harness.io/docs/platform/automation/api/add-and-manage-api-keys)
+   - Account ID is **automatically extracted** from your PAT ✨
+3. **Select project**: Choose your organization and project from the dropdowns
+4. **Done!** Your pipelines appear automatically
+
+### Alternative: Environment Variable Authentication
+
+Perfect for CI/CD environments or shared setups:
+```bash
+export HARNESS_API_KEY="your-pat"
+export HARNESS_BASE_URL="https://app.harness.io"
+export HARNESS_ACCOUNT_ID="your-account-id"
+code .
+```
+
+The extension auto-detects environment variables and skips credential prompts.
+
+**Requirements:** VS Code 1.85.0+, active Harness account
 
 ---
 
-## 📖 Usage
+## 📖 How to Use
 
-### View Modes
+### Two View Modes
 
-Switch between two views using the tabs at the top:
+Switch between views using the tabs at the top of the Harness panel:
 
-**Pipelines** — Browse all your pipelines
-- Search, filter, and pin your favorite pipelines
-- Click any pipeline to see its latest execution
-- Works without a git repository
+#### **📋 Pipelines View**
+Browse all pipelines in your project:
+- 🔍 Search by name
+- 📌 Pin favorites to the top
+- 🎯 Click any pipeline to see its latest execution
+- ✅ Works without a git repository
 
-**Executions** — Browse execution history
-- Filter by status (All / Failed / Passed)
-- Filter by pipeline to see specific execution history
-- Paginated view with 10-15 executions per page
-- Click any execution for full details and logs
+#### **📊 Executions View**
+Browse full execution history:
+- 🔀 Filter by status (All / Failed / Passed)
+- 🎯 Filter by specific pipeline
+- 📄 Paginated (10-15 per page)
+- 🔍 Click any execution for full details and on-demand logs
 
-### Key Features
+### Working with Executions
 
-**Logs** — Click any step to open its logs in a separate editor tab with syntax highlighting. Failed steps are highlighted for quick identification.
+**View Pipeline Status**
+The extension automatically detects your current git branch and commit, showing the matching pipeline execution. Live updates every 10 seconds during active runs.
 
-**Approvals** — When a pipeline needs approval, **✓ Approve** and **✕ Reject** buttons appear. The extension checks your permissions automatically.
+**Debug with Logs**
+Click any step to open its logs in a new editor tab with syntax highlighting. Failed steps are highlighted in red for quick identification.
 
-**Policy Evaluations** — See OPA policy results with warnings and errors highlighted.
+**Handle Approvals**
+When a pipeline reaches an approval step, **✓ Approve** and **✕ Reject** buttons appear inline. The extension automatically checks if you have permission to approve.
 
-**Workspace Override** — Working on multiple projects? Use **Harness: Switch Project (This Workspace)** to set different org/project per workspace folder.
+Supported approval types:
+- Harness native approvals (user/group permissions)
+- Jira approvals (with ticket link)
+- ServiceNow approvals (with ticket link)
+
+**View Policy Results**
+OPA policy evaluation results appear when configured. Warnings and errors are highlighted with detailed messages.
+
+### Multi-Project Workflows
+
+Working on multiple Harness projects? Use **"Harness: Switch Project (This Workspace)"** to override org/project for specific workspace folders. Your global settings remain unchanged.
 
 ---
 
@@ -128,7 +130,7 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 
 **Cursor AI**
 - Auto-detected when running in Cursor editor
-- **Recommended**: Install [Harness Cursor Plugin](https://cursor.com/plugins) — OAuth authentication, zero config
+- **Recommended**: Install [Harness Cursor Plugin](https://cursor.com/marketplace/harness) — OAuth authentication, zero config
 - **Fallback**: Local MCP configuration (harness-mcp-v2) for advanced users
 - Seamless prompt delivery with auto-paste
 
@@ -152,7 +154,7 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 4. Restart VS Code to activate the MCP server
 
 **For Cursor:**
-1. **Recommended**: Install [Harness Plugin](https://cursor.com/plugins) in Cursor
+1. **Recommended**: Install [Harness Plugin](https://cursor.com/marketplace/harness) in Cursor
    - OAuth authentication — no manual configuration needed
    - Plugin manages MCP connection automatically
 2. **Alternative**: Configure local MCP manually (for advanced users)
@@ -239,6 +241,12 @@ Use **Harness: Switch Project (This Workspace)** to override org/project for spe
 ## 📝 Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes and version history.
+
+---
+
+## 🤝 Contributing
+
+Interested in contributing? See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, build instructions, and guidelines.
 
 ---
 
