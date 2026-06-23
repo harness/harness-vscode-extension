@@ -1,6 +1,6 @@
 # Harness VS Code Extension — Context & Requirements
 
-> Last updated: 2026-05-21
+> Last updated: 2026-06-23
 
 ---
 
@@ -27,6 +27,9 @@ A VS Code sidebar extension that surfaces Harness pipeline execution (CI, CD, ST
 | `src/api/harnessClient.ts` | Typed fetch wrapper, injects auth headers |
 | `src/api/logService.ts` | Log fetch (blob/download + stream fallback), ZIP parsing |
 | `src/api/approvalService.ts` | Submits approve/reject via API |
+| `src/api/rerunService.ts` | Re-runs a pipeline via the retry API (inputSet YAML + first-stage `retryStages` + `runAllStages`) |
+| `src/api/abortService.ts` | Aborts a running execution via interrupt API (`AbortAll` / `UserMarkedFailure`) |
+| `src/api/stoScan.ts` | Parses STO scanner vulnerability counts from the execution graph (no API call) |
 | `src/api/userService.ts` | Fetches current user + checks group membership |
 | `src/pipeline/pipelinePoller.ts` | Polls for pipeline execution updates; pauses when sidebar hidden/window unfocused |
 | `src/pipeline/executionDispatcher.ts` | Fan-out to CI/CD/STO/TI/SSCA/OPA/CCM/AIDA/Approval modules |
@@ -88,6 +91,9 @@ Two-approach strategy in `src/api/logService.ts`:
 - `APPROVAL_UPDATE` — Harness native approval
 - `EXTERNAL_APPROVAL_UPDATE` — Jira/ServiceNow approval
 - `STEP_LOGS_OPENED_IN_TAB` — Log opened in editor (not inline)
+- `RERUN_SUCCESS` / `RERUN_CANCELLED` / `RERUN_ERROR` — Re-run outcome (success carries `newPlanExecutionId`)
+- `ABORT_SUCCESS` / `ABORT_CANCELLED` / `ABORT_ERROR` — Abort outcome
+- `STO_SCAN` — Security tab scan summary (parsed from execution graph)
 
 **Webview → Host:**
 - `approval` — Approve/reject action
@@ -95,6 +101,8 @@ Two-approach strategy in `src/api/logService.ts`:
 - `fetchExecutionDetail` — Load detail view for history execution
 - `fetchHistory` — Request execution history page
 - `setDefaultView` — Pin view preference
+- `rerunPipeline` — Re-run a terminal execution (carries `planExecutionId`, `pipelineIdentifier`, `firstStageId`)
+- `abortPipeline` — Abort a running execution (carries `planExecutionId`)
 
 ---
 
@@ -118,6 +126,16 @@ Two-approach strategy in `src/api/logService.ts`:
 - Live polling for running executions
 - On-demand log fetching (click step to open logs in editor tab)
 - Approval cards inline for Harness/Jira/ServiceNow approvals
+- Re-run / Abort action button (status-adaptive)
+
+#### Detail Tabs (enhanced theme)
+The detail card has module-driven tabs, switched via `state.activeDetailTab`
+(resets to `pipeline` on navigation). All parse data already in webview state —
+no extra API calls.
+- **Pipeline** — default stage/step tree.
+- **Build** (`mi.ci`) — `parseBuild()`: repo, branch (+ PR), commits, image/SBOM artifacts (`pipelineCIInfo`, with `stepArtifacts` fallback).
+- **Deploy** (`mi.cd`) — `parseDeploy()`: per CD stage (`layoutNodeMap` `module === 'cd'`) — services + manifests, environments, skip reasons.
+- **Security** (`mi.sto` / parsed scan) — `parseStoScan()` (host-side): per-severity tiles + new-vuln deltas; badge shows new critical+high.
 
 ---
 
@@ -196,6 +214,29 @@ FME flag `vscode-bar-experience`:
 - Extracts ticket info from `stepParameters.spec`
 - Renders card with ticket link and approval/rejection criteria
 - User updates ticket externally (no direct API call from extension)
+
+---
+
+## Re-run & Abort
+
+A single action button on each execution card swaps based on status:
+**terminal → Re-run**, **running → Abort**.
+
+### Re-run (`src/api/rerunService.ts`)
+1. Fetch original inputSet YAML — `GET /pipeline/api/pipelines/execution/{planExecutionId}/inputsetV2` (preserves runtime inputs)
+2. Resolve the first stage's YAML identifier — `GET /pipeline/api/pipeline/execute/{planExecutionId}/retryStages` (uses `groups[0].info[0].identifier`, not the UUID)
+3. Retry — `POST /pipeline/api/pipeline/execute/retry/{pipelineIdentifier}?planExecutionId=…&retryStages=<firstStage>&runAllStages=true` with the inputSet YAML as the body
+4. New execution ID is read from `data.planExecution.uuid`; extension registers it via `poller.setDetailExecution()` and the webview navigates to the detail view
+
+### Abort (`src/api/abortService.ts`)
+- `PUT /pipeline/api/pipeline/execute/interrupt/{planExecutionId}?interruptType=<type>`
+- Confirmation dialog doubles as the interrupt-type picker: **Abort All** (`AbortAll`) / **Mark as Failed** (`UserMarkedFailure`)
+- On success, `poller.refresh()` picks up the terminal status, which swaps the button back to Re-run
+
+### Polling notes (see Polling Optimization)
+- A re-run execution may 404 until queryable; the poller keeps active 1s polling within a waiting window instead of dropping to the heartbeat
+- `tick()` queues a `pendingRefresh` if one is requested mid-tick (so a post-rerun/abort `refresh()` is never lost)
+- A newly-created poller (after org/project switch) is seeded with current sidebar visibility, since visibility events only fire on change
 
 ---
 
@@ -307,9 +348,8 @@ logger.error('Component', 'Operation failed:', error);
 
 ## Known Issues
 
-1. **Pipeline re-run** — UI implemented but API endpoint returns 404 (under investigation)
-2. **AIDA RCA** — Endpoint not available (commented out in dispatcher)
-3. **STO integration** — Deferred to future release (commented out in dispatcher)
+1. **AIDA RCA** — Endpoint not available (commented out in dispatcher)
+2. **STO integration** — Deferred to future release (commented out in dispatcher)
 
 ---
 

@@ -153,12 +153,36 @@ interface LayoutNode {
   status: string;
   nodeGroup?: string;
   nodeType?: string;
+  nodeIdentifier?: string;
   stepType?: string;
+  module?: string;            // 'ci' | 'cd' | … — present on stage layout nodes
+  moduleInfo?: Record<string, any>; // module rollup (cd.serviceInfo, cd.infraExecutionSummary, …)
+  nodeRunInfo?: { whenCondition?: string; evaluatedCondition?: boolean; expressions?: unknown[] };
   startTs?: number;
   endTs?: number;
   edgeLayoutList?: { currentNodeChildren?: string[]; nextIds?: string[] };
   logBaseKey?: string;
   failureInfo?: { message?: string };
+}
+
+// Build (CI) tab shape — parsed client-side from moduleInfo.ci.
+interface BuildInfo {
+  repo: string;
+  branches: { source: string; dest?: string };
+  pr?: number | string;
+  commits: { sha: string; msg: string; author: string; link?: string }[];
+  artifacts: { name: string; type: 'docker' | 'sbom' | 'file'; version: string; registry: string; digest?: string; url?: string; failed?: boolean }[];
+}
+
+// Deploy (CD) tab shape — parsed client-side per CD stage from layoutNodeMap.
+interface DeployStage {
+  stageId: string;
+  stageName: string;
+  status: 'ok' | 'pending' | 'waiting' | 'blocked' | 'failed';
+  blocked?: boolean;
+  skipReason?: string;
+  services: { name: string; identifier?: string; version: string; kind: string; manifests?: string[] }[];
+  envs: { name: string; infraName?: string; type?: string; status: string; deployedAt?: string }[];
 }
 
 interface UnitProgress {
@@ -2770,7 +2794,8 @@ function securityTabBody(ex: ExecState): string {
     const newBadge = v.new > 0
       ? `<span class="sev-new" title="${v.new} new in this scan"><span class="sev-new-arrow">▲</span>${v.new} new</span>` : '';
     return `<button class="sev sev-${kind} ${v.total === 0 ? 'is-empty' : ''}">
-      <span class="sev-lbl">${esc(label)}</span><span class="sev-n">${v.total}</span>${newBadge}
+      <span class="sev-top"><span class="sev-lbl">${esc(label)}</span>${newBadge}</span>
+      <span class="sev-n">${v.total}</span>
     </button>`;
   }).join('');
 
@@ -2794,6 +2819,228 @@ function securityTabBody(ex: ExecState): string {
     </div>
     ${stoBtn}
     <div class="sec-meta">Scan triggered automatically by this pipeline. Findings include container images, IaC, SCA dependencies, and SAST.</div>
+  </div>`;
+}
+
+// ── Build (CI) tab ─────────────────────────────────────────────────────────
+function parseBuild(ex: ExecState): BuildInfo | null {
+  const ci = (ex.moduleInfo as any)?.ci;
+  if (!ci) return null;
+  const info = ci.ciExecutionInfoDTO ?? {};
+  const isPr = info.event === 'pullRequest';
+  const src = isPr ? info.pullRequest : info.branch;
+  const commits = (src?.commits ?? []).map((c: any) => ({
+    sha: String(c.id ?? '').slice(0, 7),
+    msg: String(c.message ?? '').split('\n')[0],
+    author: c.ownerName || c.ownerEmail || '—',
+    link: c.link,
+  }));
+
+  const ciInfo = ci.unifiedPipelineExecutionModuleInfo?.pipelineCIInfo ?? {};
+  const mapImage = (a: any) => {
+    const parts = String(a.imageName ?? '').split('/');
+    return {
+      name: parts[parts.length - 1] || a.imageName || 'image',
+      type: 'docker' as const,
+      version: a.tag ?? '—',
+      registry: parts.length > 1 ? parts[parts.length - 2] : (a.imageName ?? ''),
+      digest: a.digest ? String(a.digest).slice(0, 14) : undefined,
+      url: a.url,
+    };
+  };
+  let images = (ciInfo.imageArtifacts ?? []).map(mapImage);
+
+  // Fallback: pull published images from per-step stepArtifacts when the
+  // top-level rollup is empty (BuildAndPushDockerRegistry nodes).
+  if (images.length === 0 && ex.executionGraph?.nodeMap) {
+    for (const node of Object.values(ex.executionGraph.nodeMap) as any[]) {
+      const outcomes = node?.outcomes ?? {};
+      for (const oc of Object.values(outcomes) as any[]) {
+        const published = oc?.stepArtifacts?.publishedImageArtifacts;
+        if (Array.isArray(published)) images.push(...published.map(mapImage));
+      }
+    }
+  }
+
+  const sboms = (ciInfo.sbomArtifacts ?? []).map((a: any) => {
+    const parts = String(a.imageName ?? a.name ?? '').split('/');
+    return {
+      name: `${parts[parts.length - 1] || 'artifact'} · SBOM`,
+      type: 'sbom' as const,
+      version: a.tag ?? '—',
+      registry: parts.length > 1 ? parts[parts.length - 2] : '',
+    };
+  });
+
+  // De-dupe images by name+version (stepArtifacts fallback can repeat the rollup).
+  const seen = new Set<string>();
+  images = images.filter(i => {
+    const key = `${i.name}@${i.version}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return {
+    repo: ci.repoName ?? '—',
+    branches: { source: ci.branch ?? info.branch?.name ?? '—', dest: isPr ? info.pullRequest?.targetBranch : undefined },
+    pr: isPr ? (info.pullRequest?.id ?? info.pullRequest?.number) : undefined,
+    commits,
+    artifacts: [...images, ...sboms],
+  };
+}
+
+const GIT_BRANCH_IC = '<svg width="11" height="11" viewBox="0 0 12 12"><path d="M4 2.5 V9.5 M4 4 Q4 6 7 6 Q9 6 9 4" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><circle cx="4" cy="2.2" r="1.1" fill="currentColor"/><circle cx="4" cy="9.8" r="1.1" fill="currentColor"/><circle cx="9" cy="3" r="1.1" fill="currentColor"/></svg>';
+const ARTIFACT_IC = '<svg width="11" height="11" viewBox="0 0 12 12"><path d="M6 1.5 L10 3.5 V8 L6 10.5 L2 8 V3.5 Z M2 3.5 L6 5.5 L10 3.5 M6 5.5 V10.5" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>';
+
+function buildTabBody(ex: ExecState): string {
+  const b = parseBuild(ex);
+  if (!b) {
+    return `<div class="tb tb-build"><div class="sec-skipped">${ARTIFACT_IC}<div>
+      <div class="sec-skipped-t">No build info</div>
+      <div class="sec-skipped-d">This pipeline has no CI build stage.</div>
+    </div></div></div>`;
+  }
+
+  const prPill = b.pr
+    ? `<span class="tb-pr-inline">#${esc(b.pr)}${b.branches.dest ? ` → ${esc(b.branches.dest)}` : ''}</span>`
+    : '';
+
+  const commitRows = b.commits.length
+    ? b.commits.map(c => {
+        const sha = c.link
+          ? `<a class="tb-commit-sha" data-action="openUrl" data-url="${esc(c.link)}">${esc(c.sha)}</a>`
+          : `<span class="tb-commit-sha">${esc(c.sha)}</span>`;
+        return `<div class="tb-commit">${sha}<span class="tb-commit-msg">${esc(c.msg)}</span><span class="tb-commit-author">${esc(c.author)}</span></div>`;
+      }).join('')
+    : `<span class="tb-empty-line">No commits</span>`;
+
+  const artRows = b.artifacts.length
+    ? b.artifacts.map(a => {
+        const sub = [a.registry, a.digest].filter(Boolean).map(x => esc(x as string)).join(' · ');
+        const ver = a.version ? `<span class="tb-art-ver">${esc(a.version)}</span>` : '';
+        const ext = a.url
+          ? `<a class="tb-art-ext" data-action="openUrl" data-url="${esc(a.url)}" aria-label="Open artifact">${EXT_LINK}</a>`
+          : '';
+        return `<div class="tb-art tb-art-${a.type}${a.failed ? ' is-failed' : ''}">
+          <span class="tb-art-ic">${ARTIFACT_IC}</span>
+          <div class="tb-art-main">
+            <div class="tb-art-top"><span class="tb-art-name">${esc(a.name)}</span>${ver}</div>
+            <span class="tb-art-reg">${sub}</span>
+          </div>
+          ${ext}
+        </div>`;
+      }).join('')
+    : `<span class="tb-empty-line">No artifacts published</span>`;
+
+  return `<div class="tb tb-build">
+    <div class="tb-stage">
+      <div class="tb-kv"><span class="tb-k">Repository</span><span class="tb-v tb-v-repo"><svg width="11" height="11" viewBox="0 0 12 12" aria-hidden><path d="M3 1.5 L9 1.5 Q10 1.5 10 2.5 L10 10 L3 10 Q2 10 2 9 Q2 8 3 8 L10 8" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg><span class="mono">${esc(b.repo)}</span></span></div>
+      <div class="tb-kv"><span class="tb-k">Branch</span><span class="tb-v">${GIT_BRANCH_IC}<span class="mono">${esc(b.branches.source)}</span>${prPill}</span></div>
+      <div class="tb-kv tb-kv-stack"><span class="tb-k">Commits${b.commits.length ? ` <span class="tb-k-n">${b.commits.length}</span>` : ''}</span><div class="tb-commits">${commitRows}</div></div>
+      <div class="tb-kv tb-kv-stack"><span class="tb-k">Artifacts${b.artifacts.length ? ` <span class="tb-k-n">${b.artifacts.length}</span>` : ''}</span><div class="tb-arts">${artRows}</div></div>
+    </div>
+  </div>`;
+}
+
+// ── Deploy (CD) tab ────────────────────────────────────────────────────────
+function parseDeploy(ex: ExecState): DeployStage[] {
+  const map = ex.layoutNodeMap ?? {};
+  const S: Record<string, DeployStage['status']> = {
+    SUCCESS: 'ok', NOTSTARTED: 'pending', NOT_STARTED: 'pending',
+    APPROVALWAITING: 'waiting', SKIPPED: 'blocked', FAILED: 'failed',
+  };
+  return Object.values(map)
+    .filter(n => n.module === 'cd' && (n.nodeType === 'Deployment' || !!n.moduleInfo?.cd))
+    .map(n => {
+      const cd = n.moduleInfo?.cd ?? {};
+      const si = cd.serviceInfo, infra = cd.infraExecutionSummary;
+      const rawStatus = String(n.status).toUpperCase();
+      const status = S[rawStatus] ?? 'pending';
+      const blocked = status === 'blocked';
+      const skipReason = (n.nodeRunInfo && n.nodeRunInfo.evaluatedCondition === false)
+        ? 'Skipped — when condition not met' : undefined;
+      return {
+        stageId: n.nodeUuid,
+        stageName: n.name,
+        status, blocked, skipReason,
+        services: si ? [{
+          name: si.displayName ?? si.identifier ?? 'service',
+          identifier: si.identifier,
+          version: si.artifacts?.primary?.tag ?? '—',
+          kind: si.deploymentType ?? 'Deployment',
+          manifests: si.manifestInfo?.paths ?? [],
+        }] : [],
+        envs: infra ? [{
+          name: infra.name ?? infra.identifier ?? 'env',
+          infraName: infra.infrastructureName,
+          type: infra.type,
+          status: rawStatus === 'SUCCESS' ? 'ok' : status,
+          deployedAt: n.endTs ? ago(n.endTs) : undefined,
+        }] : [],
+      };
+    });
+}
+
+const SVC_IC = '<svg width="12" height="12" viewBox="0 0 14 14"><path d="M7 1.5 L12 4 L7 6.5 L2 4 Z M2 4 L2 10 L7 12.5 L12 10 L12 4 M7 6.5 L7 12.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+
+const STAGE_CHIP_LABEL: Record<DeployStage['status'], string> = {
+  ok: 'Deployed', pending: 'Pending', waiting: 'Waiting', blocked: 'Skipped', failed: 'Failed',
+};
+
+function deployTabBody(ex: ExecState): string {
+  const stages = parseDeploy(ex);
+  if (!stages.length) {
+    return `<div class="tb tb-deploy"><div class="sec-skipped">${GIT_BRANCH_IC}<div>
+      <div class="sec-skipped-t">No deploy info</div>
+      <div class="sec-skipped-d">This pipeline has no CD deployment stage.</div>
+    </div></div></div>`;
+  }
+
+  const totalEnv = stages.reduce((t, s) => t + s.envs.length, 0);
+  const deployedEnv = stages.reduce((t, s) => t + s.envs.filter(e => e.status === 'ok').length, 0);
+
+  const cards = stages.map(s => {
+    const chip = `<span class="tb-stage-chip is-${s.status}">${STAGE_CHIP_LABEL[s.status]}</span>`;
+    const skip = s.skipReason ? `<div class="tb-skip">${esc(s.skipReason)}</div>` : '';
+
+    const services = s.services.map(svc => {
+      const manifests = (svc.manifests ?? []).length
+        ? `<div class="tb-manifests">${svc.manifests!.map(m => `<span class="tb-manifest">${esc(m.split('/').pop() || m)}</span>`).join('')}</div>`
+        : '';
+      return `<div class="tb-svc">
+        <div class="tb-svc-row"><span class="tb-svc-ic">${SVC_IC}</span><span class="tb-svc-name">${esc(svc.name)}</span><span class="tb-svc-kind">${esc(svc.kind)}</span><span class="tb-svc-ver mono">${esc(svc.version)}</span></div>
+        ${manifests}
+      </div>`;
+    }).join('');
+
+    const envs = s.envs.map(e => {
+      const meta = [e.type, e.infraName].filter(Boolean).map(x => esc(x as string)).join(' · ');
+      const when = e.deployedAt ? `<span class="tb-env-at">${esc(e.deployedAt)}</span>` : '';
+      return `<div class="tb-env">
+        <span class="tb-env-dot is-${e.status}"></span>
+        <span class="tb-env-name">${esc(e.name)}</span>
+        <span class="tb-env-meta">${meta}</span>${when}
+        <span class="tb-env-ext" aria-label="Open environment">${EXT_LINK}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="tb-cd-stage">
+      <div class="tb-cd-head"><span class="tb-cd-name">${esc(s.stageName)}</span>${chip}</div>
+      ${skip}
+      ${services ? `<div class="tb-svcs">${services}</div>` : ''}
+      ${envs ? `<div class="tb-envs">${envs}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `<div class="tb tb-deploy">
+    <div class="tb-cd-rollup">
+      <span class="tb-cd-rollup-l">Stages</span>
+      <span class="tb-cd-rollup-n">${stages.length}</span>
+      <span class="tb-cd-rollup-sep">·</span>
+      <span class="tb-cd-rollup-l">${deployedEnv}/${totalEnv} envs live</span>
+    </div>
+    ${cards}
   </div>`;
 }
 
@@ -3075,9 +3322,17 @@ function execCard(ex: ExecState): string {
       parts.push(`<div class="tabs">${tabs.join('')}</div>`);
     }
 
-    // Security tab body — render it and skip the pipeline body below.
+    // Non-pipeline tab bodies — render and skip the pipeline body below.
     if (at === 'sec') {
       parts.push(securityTabBody(ex));
+      return parts.join('');
+    }
+    if (at === 'ci') {
+      parts.push(buildTabBody(ex));
+      return parts.join('');
+    }
+    if (at === 'cd') {
+      parts.push(deployTabBody(ex));
       return parts.join('');
     }
   } else {
@@ -3235,12 +3490,12 @@ function execCard(ex: ExecState): string {
               <span class="step-stat">${stageIcon(step.status)}</span>
               <span class="step-name">${esc(step.name)}</span>
               <span class="step-dur" data-start-ts="${step.startTs || 0}" data-end-ts="${step.endTs || 0}">${dur(step.startTs, step.endTs)}</span>
-              ${canExpand ? `<span class="step-ext">${extIcon}</span>` : ''}
+              ${canExpand ? `<span class="tip-wrap"><span class="step-ext">${extIcon}</span><span class="tip">View step logs</span></span>` : ''}
             </button>`);
           } else {
             // Simple theme
             const showExtIcon = state.logViewerVariation === 'expanded' && canExpand;
-            const extIcon = showExtIcon ? '<span class="step-ext-ic">↗</span>' : '';
+            const extIcon = showExtIcon ? '<span class="tip-wrap"><span class="step-ext-ic">↗</span><span class="tip">View step logs</span></span>' : '';
 
             parts.push(`<div class="step-row${stepActive ? ' step-running' : ''}${stepFailed ? ' failed' : ''}${stepWarning ? ' warning' : ''}${clickable}" data-action="toggleStep"${nodeAttr}${logKeyAttr}${stepNameAttr}${stageNameAttr}${pipelineNameAttr}${planIdAttr}${statusAttr}${durationAttr}>
               <span class="step-toggle${isLoading ? ' step-loading' : ''}">${toggleIcon}</span>
@@ -3561,7 +3816,7 @@ function opaRow(ex: ExecState): string {
     : '';
 
   const url = o.policyUrl ?? ex.harnessUrl;
-  const link = url ? `<a class="opa-link" data-action="openUrl" data-url="${esc(url)}">↗</a>` : '';
+  const link = url ? `<span class="tip-wrap"><a class="opa-link" data-action="openUrl" data-url="${esc(url)}">↗</a><span class="tip">View policy evaluations</span></span>` : '';
 
   return `<div class="opa-row">
     <span class="opa-row-label">Policy Evaluations</span>
