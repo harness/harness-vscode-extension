@@ -197,6 +197,22 @@ interface ExecGraph {
   nodeAdjacencyListMap?: Record<string, { children?: string[]; nextIds?: string[] }>;
 }
 
+// STO scan summary — parsed host-side (src/api/stoScan.ts) from the execution
+// graph and delivered via STO_SCAN. Kept in sync with that module's exports.
+interface SevCount { total: number; new: number; }
+interface StoScanner {
+  name: string; stepType: string; total: number; new: number; status: string; consoleUrl?: string;
+}
+interface StoScanSummary {
+  scanId: string;
+  skipped?: boolean;
+  running?: boolean;
+  tools: string[];
+  critical: SevCount; high: SevCount; medium: SevCount; low: SevCount; info: SevCount; exempted: SevCount;
+  scanners: StoScanner[];
+  stoUrl?: string;
+}
+
 interface ExecState {
   logsUnavailable?: boolean;  // set when all log fetches fail (FF not enabled)
   planExecutionId: string;
@@ -224,6 +240,7 @@ interface ExecState {
   externalApproval?: { planExecutionId: string; approvalType: 'Jira' | 'ServiceNow'; ticketId: string; ticketUrl?: string; projectKey?: string; issueType?: string; ticketType?: string; approvalCriteria?: string; rejectionCriteria?: string; stageIdentifier?: string };
   cost?:  { totalCost?: number; currency?: string; branchAvgCost?: number };
   sto?:   { count: number; critical: number; high: number; medium: number };
+  stoScan?: StoScanSummary;
   ti?:    { total: number; failed: number; flaky: number; selected: number };
   ssca?:  { flagged: number };
   cd?:    Array<{ environment: string; status: string }>;
@@ -284,6 +301,7 @@ const state = {
 
   // Navigation state
   viewMode:      'pipelines' as ViewMode,
+  activeDetailTab: 'pipeline' as 'pipeline' | 'ci' | 'cd' | 'sec' | 'ti', // active tab within the detail card
 
   // Pipelines tab state
   pipelineList:  [] as PipelineItem[],
@@ -733,6 +751,10 @@ window.addEventListener('message', ({ data: msg }) => {
       }
       break;
 
+    case 'STO_SCAN':
+      for (const [, ex] of state.executions) { ex.stoScan = (msg as any).stoScan; }
+      break;
+
     case 'TI_SUMMARY':
       for (const [, ex] of state.executions) {
         ex.ti = { total: msg.total, failed: msg.failed, flaky: msg.flaky, selected: msg.selected };
@@ -1026,6 +1048,7 @@ window.addEventListener('message', ({ data: msg }) => {
       });
       // Switch to detail view of the new execution with loading state
       state.viewMode = 'detail';
+      state.activeDetailTab = 'pipeline'; // reset tab for the new execution
       state.detailExecId = (msg as any).newPlanExecutionId;
       state.loadingExecution = true; // Show loading while fetching data
       console.log('[Webview] Switched to detail view:', {
@@ -2715,6 +2738,65 @@ function adjacentNav(): string {
   </div>`;
 }
 
+// ── Security tab body ──────────────────────────────────────────────────────
+const SHIELD = '<svg width="13" height="13" viewBox="0 0 12 12"><path d="M6 1.5 L10 3 L10 6.2 Q10 9 6 10.5 Q2 9 2 6.2 L2 3 Z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+const EXT_LINK = '<svg width="11" height="11" viewBox="0 0 12 12"><path d="M4.5 2 H10 V7.5 M10 2 L5 7 M3 4 V10 H9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function securityTabBody(ex: ExecState): string {
+  const s = ex.stoScan;
+  if (!s) {
+    return `<div class="tb tb-sec"><div class="sec-skipped">${SHIELD}<div>
+      <div class="sec-skipped-t">No security scan</div>
+      <div class="sec-skipped-d">This pipeline has no security scan configured.</div>
+    </div></div></div>`;
+  }
+
+  if (s.skipped) {
+    return `<div class="tb tb-sec"><div class="sec-skipped">${SHIELD}<div>
+      <div class="sec-skipped-t">Security scan skipped</div>
+      <div class="sec-skipped-d">Earlier stage failed — scan did not run on this execution.</div>
+    </div></div></div>`;
+  }
+
+  const cats: Array<['critical' | 'high' | 'medium' | 'low' | 'info' | 'exempted', string, string]> = [
+    ['critical', 'Critical', 'crit'], ['high', 'High', 'high'], ['medium', 'Medium', 'med'],
+    ['low', 'Low', 'low'], ['info', 'Info', 'info'], ['exempted', 'Exempted', 'exempt'],
+  ];
+
+  let totalFindings = 0, newCount = 0;
+  const tiles = cats.map(([id, label, kind]) => {
+    const v: SevCount = s[id] ?? { total: 0, new: 0 };
+    totalFindings += v.total; newCount += v.new;
+    const newBadge = v.new > 0
+      ? `<span class="sev-new" title="${v.new} new in this scan"><span class="sev-new-arrow">▲</span>${v.new} new</span>` : '';
+    return `<button class="sev sev-${kind} ${v.total === 0 ? 'is-empty' : ''}">
+      <span class="sev-lbl">${esc(label)}</span><span class="sev-n">${v.total}</span>${newBadge}
+    </button>`;
+  }).join('');
+
+  const tools = s.tools.map(t => `<span class="sec-tool">${esc(t)}</span>`).join('');
+  const live = s.running ? `<span class="sec-scan-live"><span class="sec-scan-live-dot"></span> scanning…</span>` : '';
+  const newTotalRow = newCount > 0
+    ? `<div class="sec-total-row sec-total-row-new"><span class="sec-total-l"><span class="sec-new-ic">▲</span>New in this scan</span><span class="sec-total-n sec-total-n-new">${newCount}</span></div>` : '';
+  const stoBtn = s.stoUrl
+    ? `<a class="sec-sto-btn" data-action="openUrl" data-url="${esc(s.stoUrl)}">${SHIELD}<span class="sec-sto-l">Open in Harness STO</span>${EXT_LINK}</a>`
+    : '';
+
+  return `<div class="tb tb-sec">
+    <div class="sec-scan-bar">
+      <div class="sec-scan-l">${SHIELD}<span class="sec-scan-ttl">Security scan</span>${live}</div>
+      <div class="sec-scan-r">${tools}</div>
+    </div>
+    <div class="sec-grid">${tiles}</div>
+    <div class="sec-total">
+      <div class="sec-total-row"><span class="sec-total-l">Total findings</span><span class="sec-total-n">${totalFindings}</span></div>
+      ${newTotalRow}
+    </div>
+    ${stoBtn}
+    <div class="sec-meta">Scan triggered automatically by this pipeline. Findings include container images, IaC, SCA dependencies, and SAST.</div>
+  </div>`;
+}
+
 // ── Execution card ─────────────────────────────────────────────────────────
 function execCard(ex: ExecState): string {
   const isRunning = !ex.isTerminal;
@@ -2957,35 +3039,46 @@ function execCard(ex: ExecState): string {
     const mi = ex.moduleInfo as any;
     const tabs: string[] = [];
 
+    const at = state.activeDetailTab;
+    const tabBtn = (tab: string, label: string, badge = '') =>
+      `<button class="tab${at === tab ? ' on' : ''}" data-action="switchDetailTab" data-tab="${tab}">${label}${badge}</button>`;
+
     // Pipeline tab (always visible, default active)
-    tabs.push(`<button class="tab on">Pipeline</button>`);
+    tabs.push(tabBtn('pipeline', 'Pipeline'));
 
     // Build tab (CI module)
     if (mi?.ci) {
-      tabs.push(`<button class="tab">Build</button>`);
+      tabs.push(tabBtn('ci', 'Build'));
     }
 
     // Deploy tab (CD module)
     if (mi?.cd) {
-      tabs.push(`<button class="tab">Deploy</button>`);
+      tabs.push(tabBtn('cd', 'Deploy'));
     }
 
-    // Security tab (STO module)
-    if (mi?.sto || ex.sto) {
-      const errorCount = ex.sto?.critical || 0;
-      const badge = errorCount > 0 ? `<span class="tab-badge">${errorCount}</span>` : '';
-      tabs.push(`<button class="tab">Security${badge}</button>`);
+    // Security tab (STO module) — badge shows NEW critical+high (design intent)
+    if (mi?.sto || ex.stoScan) {
+      const s = ex.stoScan;
+      const newCritHigh = s ? s.critical.new + s.high.new : 0;
+      const badge = newCritHigh > 0 ? `<span class="tab-badge">${newCritHigh}</span>` : '';
+      tabs.push(tabBtn('sec', 'Security', badge));
     }
 
     // Tests tab (TI module)
     if (mi?.ti || ex.ti) {
       const failCount = ex.ti?.failed || 0;
       const badge = failCount > 0 ? `<span class="tab-badge warn">${failCount}</span>` : '';
-      tabs.push(`<button class="tab">Tests${badge}</button>`);
+      tabs.push(tabBtn('ti', 'Tests', badge));
     }
 
     if (tabs.length > 1) {
       parts.push(`<div class="tabs">${tabs.join('')}</div>`);
+    }
+
+    // Security tab body — render it and skip the pipeline body below.
+    if (at === 'sec') {
+      parts.push(securityTabBody(ex));
+      return parts.join('');
     }
   } else {
     // Simple theme: module badges
@@ -4008,6 +4101,7 @@ function bind(): void {
 
       state.detailExecId = execId;
       state.viewMode = 'detail';
+      state.activeDetailTab = 'pipeline'; // reset tab when switching executions
       state.loadingExecution = true; // Show loading state while fetching
       state.executionError = null; // Clear any previous error
       // Request full execution detail from extension host
@@ -4019,6 +4113,7 @@ function bind(): void {
   // Back to history
   q('[data-action="backToHistory"]', () => {
     state.viewMode = 'executions';
+    state.activeDetailTab = 'pipeline'; // reset tab when leaving detail view
     // Clear the detail execution when going back to history list
     if (state.detailExecId) {
       state.executions.delete(state.detailExecId);
@@ -4155,6 +4250,14 @@ function bind(): void {
       if (!planExecutionId) return;
       el.setAttribute('disabled', 'true');
       vscode.postMessage({ type: 'abortPipeline', planExecutionId });
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="switchDetailTab"]').forEach(el => {
+    el.addEventListener('click', () => {
+      const tab = el.dataset['tab'] as typeof state.activeDetailTab;
+      state.activeDetailTab = tab || 'pipeline';
+      scheduleRender(true);
     });
   });
 

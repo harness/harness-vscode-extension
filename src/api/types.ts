@@ -98,7 +98,17 @@ export interface ExecutionNode {
   unitProgresses?: Array<{ unitName: string; status: string; startTime?: number; endTime?: number }>;
   // HarnessApproval step — present when waiting for approval
   executableElementsCount?: number;
-  outcomes?: Record<string, { approvalInstanceId?: string }>;
+  // `outcomes` holds approval instances, step artifacts, AND (for STO scanner
+  // steps) the aggregate vulnerability counts. The counts live under the
+  // `output` key: outcomes.output.outputVariables.
+  outcomes?: Record<string, {
+    approvalInstanceId?: string;
+    outputVariables?: Record<string, string>;
+    stepArtifacts?: unknown;
+  }>;
+  // Present on the legacy custom `Security` scan node — product_name reveals
+  // the underlying scanner.
+  stepParameters?: { spec?: Record<string, unknown> & { product_name?: string } };
 }
 
 export interface StoFinding {
