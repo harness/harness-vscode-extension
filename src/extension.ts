@@ -216,24 +216,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } else if (m.type === 'rerunPipeline' && m.planExecutionId && m.pipelineIdentifier && currentConfig) {
       const planExecutionId = m.planExecutionId;
       const pipelineIdentifier = m.pipelineIdentifier;
+      const firstStageId = (m as any).firstStageId;
+
+      // Show confirmation dialog
+      const confirmation = await vscode.window.showWarningMessage(
+        `Re-run pipeline "${pipelineIdentifier}"?`,
+        { modal: true, detail: 'This will trigger a new execution with the same inputs from the original run.' },
+        'Yes',
+        'No'
+      );
+
+      if (confirmation !== 'Yes') {
+        bridge.send({ type: 'RERUN_CANCELLED' });
+        return;
+      }
+
       try {
-        const result = await rerunPipeline(currentConfig, pipelineIdentifier, planExecutionId);
+        const result = await rerunPipeline(currentConfig, pipelineIdentifier, planExecutionId, firstStageId);
         const newPlanExecutionId = result.planExecutionId;
         vscode.window.showInformationMessage(`Harness: Pipeline re-run triggered successfully.`);
 
-        // Wait a moment for the new execution to be created, then fetch and display it
-        setTimeout(async () => {
-          if (currentConfig && newPlanExecutionId) {
-            await fetchExecutionDetail(currentConfig, bridge, diagnostics, newPlanExecutionId);
-            // Register with poller for continuous updates
-            if (poller) {
-              poller.setDetailExecution(newPlanExecutionId);
-            }
-          }
-        }, 2000);
+        bridge.send({ type: 'RERUN_SUCCESS', newPlanExecutionId });
+
+        if (poller) {
+          poller.setDetailExecution(newPlanExecutionId);
+          // Trigger immediate refresh to start polling the new execution
+          poller.refresh();
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         vscode.window.showErrorMessage(`Harness: Failed to re-run pipeline — ${msg}`);
+        bridge.send({ type: 'RERUN_ERROR' });
       }
     } else if (m.type === 'fetchHistory') {
       logger.debug('Extension', 'fetchHistory message received', { page: m.page, filter: m.filter, pageSize: m.pageSize, pipelineId: m.pipelineId, hasConfig: !!currentConfig });

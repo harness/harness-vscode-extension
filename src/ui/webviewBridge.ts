@@ -34,7 +34,10 @@ export type WebviewMessage =
   | { type: 'AI_RESPONSE'; content: string; toolCalls?: Array<{ name: string; args?: unknown }>; durationMs?: number }
   | { type: 'AI_LAUNCHED'; tool: string }
   | { type: 'AI_CONFIG_DONE'; tool: string; scope: 'project' | 'global'; path: string }
-  | { type: 'AI_ERROR'; message: string };
+  | { type: 'AI_ERROR'; message: string }
+  | { type: 'RERUN_SUCCESS'; newPlanExecutionId: string }
+  | { type: 'RERUN_CANCELLED' }
+  | { type: 'RERUN_ERROR' };
 
 export class WebviewBridge {
   private view: vscode.WebviewView | undefined;

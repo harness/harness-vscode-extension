@@ -999,6 +999,34 @@ window.addEventListener('message', ({ data: msg }) => {
       state.aiMcpConfiguring = false;
       scheduleRender(true); // Force immediate render
       return; // Skip the scheduleRender at the end
+
+    case 'RERUN_SUCCESS':
+      console.log('[Webview] RERUN_SUCCESS received:', { newPlanExecutionId: (msg as any).newPlanExecutionId });
+      // Re-enable rerun buttons and switch to detail view of new execution
+      document.querySelectorAll<HTMLElement>('[data-action="rerunPipeline"]').forEach(el => {
+        el.removeAttribute('disabled');
+      });
+      // Switch to detail view of the new execution with loading state
+      state.viewMode = 'detail';
+      state.detailExecId = (msg as any).newPlanExecutionId;
+      state.loadingExecution = true; // Show loading while fetching data
+      console.log('[Webview] Switched to detail view:', {
+        viewMode: state.viewMode,
+        detailExecId: state.detailExecId,
+        loadingExecution: state.loadingExecution,
+        executionInMap: state.executions.has((msg as any).newPlanExecutionId)
+      });
+      scheduleRender(true);
+      return;
+
+    case 'RERUN_CANCELLED':
+    case 'RERUN_ERROR':
+      // Re-enable rerun buttons
+      document.querySelectorAll<HTMLElement>('[data-action="rerunPipeline"]').forEach(el => {
+        el.removeAttribute('disabled');
+      });
+      scheduleRender(true);
+      return;
   }
 
   scheduleRender();
@@ -2719,8 +2747,21 @@ function execCard(ex: ExecState): string {
     const refreshIcon = '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M10 6 A4 4 0 1 1 6 2 L8.5 2 M8.5 2 L8.5 4.5 M8.5 2 L6.2 4.2" stroke="currentColor" strokeWidth="1.2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>';
     const chevIcon = '<svg width="10" height="10" viewBox="0 0 10 10" style="transform:rotate(90deg)"><path d="M3 2 L6 5 L3 8" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>';
 
+    // Extract first stage identifier for rerun (need YAML identifier, not UUID)
+    // Try to get identifier from executionGraph first, then try stage name, fallback to nodeUuid
+    let firstStageId = '';
+    if (stages.length > 0 && ex.executionGraph?.nodeMap) {
+      const firstStageUuid = stages[0].nodeUuid;
+      const graphNode = ex.executionGraph.nodeMap[firstStageUuid];
+      // Try identifier, then name, then UUID
+      firstStageId = graphNode?.identifier || stages[0].name || firstStageUuid;
+    } else if (stages.length > 0) {
+      // No executionGraph, try stage name
+      firstStageId = stages[0].name || stages[0].nodeUuid;
+    }
+
     const rerunButtons = terminal
-      ? `<button class="pip-ibtn" data-action="rerunPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" data-pipeline-identifier="${esc(ex.pipelineIdentifier)}" title="Re-run pipeline" aria-label="Re-run pipeline">${refreshIcon}</button>
+      ? `<button class="pip-ibtn" data-action="rerunPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" data-pipeline-identifier="${esc(ex.pipelineIdentifier)}" data-first-stage-id="${esc(firstStageId)}" title="Re-run pipeline" aria-label="Re-run pipeline">${refreshIcon}</button>
          <button class="pip-ibtn pip-ibtn-more" title="More re-run options" aria-label="More re-run options" disabled>${chevIcon}</button>`
       : '';
 
@@ -2855,8 +2896,18 @@ function execCard(ex: ExecState): string {
     const pipelineName = ex.harnessUrl
       ? `<a class="exec-name exec-name-link" data-action="openUrl" data-url="${esc(ex.harnessUrl)}" title="Open in Harness">${esc(ex.name)}</a>`
       : `<span class="exec-name">${esc(ex.name)}</span>`;
+    // Extract first stage identifier for rerun (need YAML identifier, not UUID)
+    // Try identifier, then name, then UUID
+    let firstStageId = '';
+    if (stages.length > 0 && ex.executionGraph?.nodeMap) {
+      const firstStageUuid = stages[0].nodeUuid;
+      const graphNode = ex.executionGraph.nodeMap[firstStageUuid];
+      firstStageId = graphNode?.identifier || stages[0].name || firstStageUuid;
+    } else if (stages.length > 0) {
+      firstStageId = stages[0].name || stages[0].nodeUuid;
+    }
     const rerunButton = terminal
-      ? `<button class="exec-rerun-btn" data-action="rerunPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" data-pipeline-identifier="${esc(ex.pipelineIdentifier)}" title="Re-run pipeline" aria-label="Re-run pipeline">↻</button>`
+      ? `<button class="exec-rerun-btn" data-action="rerunPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" data-pipeline-identifier="${esc(ex.pipelineIdentifier)}" data-first-stage-id="${esc(firstStageId)}" title="Re-run pipeline" aria-label="Re-run pipeline">↻</button>`
       : '';
     const harnessLink = ex.harnessUrl
       ? `<a class="exec-link" data-action="openUrl" data-url="${esc(ex.harnessUrl)}" title="Open in Harness">↗</a>`
@@ -4062,9 +4113,10 @@ function bind(): void {
     el.addEventListener('click', () => {
       const planExecutionId = el.dataset['planExecutionId'];
       const pipelineIdentifier = el.dataset['pipelineIdentifier'];
+      const firstStageId = el.dataset['firstStageId'];
       if (!planExecutionId || !pipelineIdentifier) return;
       el.setAttribute('disabled', 'true');
-      vscode.postMessage({ type: 'rerunPipeline', planExecutionId, pipelineIdentifier });
+      vscode.postMessage({ type: 'rerunPipeline', planExecutionId, pipelineIdentifier, firstStageId });
     });
   });
 
