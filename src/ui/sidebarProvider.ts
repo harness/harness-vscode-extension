@@ -3,6 +3,7 @@ import { WebviewBridge } from './webviewBridge';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private onVisibilityChangeCallback?: (visible: boolean) => void;
+  private webviewView?: vscode.WebviewView;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -16,11 +17,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.onVisibilityChangeCallback = callback;
   }
 
+  /**
+   * Current sidebar visibility. Used to initialise a freshly-created poller
+   * (e.g. after an org/project switch) since visibility events only fire on
+   * an actual change, not when a new poller is wired up.
+   */
+  isVisible(): boolean {
+    return this.webviewView?.visible ?? false;
+  }
+
   async resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken
   ): Promise<void> {
+    this.webviewView = webviewView;
+
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [

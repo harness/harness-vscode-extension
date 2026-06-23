@@ -13,6 +13,7 @@ import { TiCodeActionProvider } from './features/tiAnnotations';
 import { registerFfDecorations } from './features/ffDecorations';
 import { submitApproval } from './api/approvalService';
 import { rerunPipeline } from './api/rerunService';
+import { abortExecution, InterruptType } from './api/abortService';
 import { dispatchModules } from './pipeline/executionDispatcher';
 import { initFmeClient, destroyFmeClient, getLogViewerVariation } from './fme/fmeClient';
 import { LogContentProvider, LOG_SCHEME } from './logs/logContentProvider';
@@ -186,13 +187,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     poller = new PipelinePoller(currentClient, config, diagnostics, bridge, outputChannel);
     poller.start();
 
-    // Initialize poller with current window focus state
+    // Initialize poller with current window focus + sidebar visibility state.
+    // Visibility events only fire on change, so a poller created after an
+    // org/project switch would otherwise assume the sidebar is hidden and
+    // skip every tick (defaults to isSidebarVisible=false).
     poller.setWindowFocused(vscode.window.state.focused);
+    poller.setSidebarVisible(sidebarProvider.isVisible());
   }
 
   // Route webview messages back to VS Code commands
   bridge.onMessage(async (msg: unknown) => {
-    const m = msg as { type: string; command?: string; url?: string; approvalInstanceId?: string; action?: string; comments?: string; page?: number; filter?: string; planExecutionId?: string; pipelineIdentifier?: string; pipelineId?: string; pinnedPipelines?: string[] };
+    const m = msg as { type: string; command?: string; url?: string; approvalInstanceId?: string; action?: string; comments?: string; page?: number; filter?: string; planExecutionId?: string; pipelineIdentifier?: string; pipelineId?: string; pinnedPipelines?: string[]; interruptType?: string };
 
     logger.debug('Extension', 'Bridge received message:', m.type);
 
@@ -216,24 +221,72 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } else if (m.type === 'rerunPipeline' && m.planExecutionId && m.pipelineIdentifier && currentConfig) {
       const planExecutionId = m.planExecutionId;
       const pipelineIdentifier = m.pipelineIdentifier;
+      const firstStageId = (m as any).firstStageId;
+
+      // Show confirmation dialog
+      const confirmation = await vscode.window.showWarningMessage(
+        `Re-run pipeline "${pipelineIdentifier}"?`,
+        { modal: true, detail: 'This will trigger a new execution with the same inputs from the original run.' },
+        'Yes',
+        'No'
+      );
+
+      if (confirmation !== 'Yes') {
+        bridge.send({ type: 'RERUN_CANCELLED' });
+        return;
+      }
+
       try {
-        const result = await rerunPipeline(currentConfig, pipelineIdentifier, planExecutionId);
+        const result = await rerunPipeline(currentConfig, pipelineIdentifier, planExecutionId, firstStageId);
         const newPlanExecutionId = result.planExecutionId;
         vscode.window.showInformationMessage(`Harness: Pipeline re-run triggered successfully.`);
 
-        // Wait a moment for the new execution to be created, then fetch and display it
-        setTimeout(async () => {
-          if (currentConfig && newPlanExecutionId) {
-            await fetchExecutionDetail(currentConfig, bridge, diagnostics, newPlanExecutionId);
-            // Register with poller for continuous updates
-            if (poller) {
-              poller.setDetailExecution(newPlanExecutionId);
-            }
-          }
-        }, 2000);
+        bridge.send({ type: 'RERUN_SUCCESS', newPlanExecutionId });
+
+        if (poller) {
+          poller.setDetailExecution(newPlanExecutionId);
+          // Trigger immediate refresh to start polling the new execution
+          poller.refresh();
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         vscode.window.showErrorMessage(`Harness: Failed to re-run pipeline — ${msg}`);
+        bridge.send({ type: 'RERUN_ERROR' });
+      }
+    } else if (m.type === 'abortPipeline' && m.planExecutionId && currentConfig) {
+      const planExecutionId = m.planExecutionId;
+
+      // Confirmation dialog doubles as the interrupt-type picker
+      const choice = await vscode.window.showWarningMessage(
+        'Abort this pipeline execution?',
+        {
+          modal: true,
+          detail: '"Abort All" stops the entire pipeline execution. "Mark as Failed" marks the execution as failed by the user.',
+        },
+        'Abort All',
+        'Mark as Failed'
+      );
+
+      if (choice !== 'Abort All' && choice !== 'Mark as Failed') {
+        bridge.send({ type: 'ABORT_CANCELLED' });
+        return;
+      }
+
+      const interruptType: InterruptType = choice === 'Mark as Failed' ? 'UserMarkedFailure' : 'AbortAll';
+
+      try {
+        await abortExecution(currentConfig, planExecutionId, interruptType);
+        vscode.window.showInformationMessage('Harness: Pipeline abort requested.');
+
+        bridge.send({ type: 'ABORT_SUCCESS', planExecutionId });
+
+        // Refresh so the poller picks up the new (ABORTED/terminal) status,
+        // which swaps the abort button back to the re-run button.
+        poller?.refresh();
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        vscode.window.showErrorMessage(`Harness: Failed to abort pipeline — ${msg}`);
+        bridge.send({ type: 'ABORT_ERROR' });
       }
     } else if (m.type === 'fetchHistory') {
       logger.debug('Extension', 'fetchHistory message received', { page: m.page, filter: m.filter, pageSize: m.pageSize, pipelineId: m.pipelineId, hasConfig: !!currentConfig });

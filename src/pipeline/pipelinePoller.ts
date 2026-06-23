@@ -57,6 +57,7 @@ export class PipelinePoller implements vscode.Disposable {
   private detailExecutionId: string | null = null;
   private detailLastStatus: string | null = null;
   private detailLastGraphHash: string | null = null; // Track detail execution graph changes
+  private detailWaitingSince: number | null = null; // when we started waiting for a detail execution to appear
 
   // Visibility tracking - pause polling when sidebar is hidden or window unfocused
   private isSidebarVisible: boolean = false;
@@ -64,6 +65,10 @@ export class PipelinePoller implements vscode.Disposable {
 
   // Re-entrancy guard - prevent concurrent tick() executions
   private isTickRunning: boolean = false;
+  // Set when a tick is requested while one is already running (e.g. refresh()
+  // right after a re-run/abort). The in-flight tick re-runs once on completion
+  // so the requested refresh is never silently dropped.
+  private pendingRefresh: boolean = false;
 
   constructor(
     private readonly client: HarnessClient,
@@ -84,6 +89,10 @@ export class PipelinePoller implements vscode.Disposable {
   refresh(): void {
     this.lastStatus = null;
     this.lastGraphHash = null;
+    // Reset detail tracking too so a forced refresh re-emits the current
+    // detail execution state (e.g. right after an abort transitions to ABORTED).
+    this.detailLastStatus = null;
+    this.detailLastGraphHash = null;
     this.stopTimer();
     this.tick();
   }
@@ -212,9 +221,14 @@ export class PipelinePoller implements vscode.Disposable {
   }
 
   private async tick(): Promise<void> {
-    // Prevent concurrent executions - if tick is already running, skip this call
+    // Prevent concurrent executions - if tick is already running, queue a
+    // follow-up instead of dropping it. Otherwise a refresh() issued during an
+    // in-flight tick (e.g. right after a re-run/abort) is lost, and the stale
+    // in-flight tick reschedules at the slow heartbeat — stranding the newly
+    // registered detail execution on "loading" for up to 2 minutes.
     if (this.isTickRunning) {
-      logger.debug('Poller', 'Skipping tick - already running');
+      logger.debug('Poller', 'Tick already running - queueing pending refresh');
+      this.pendingRefresh = true;
       return;
     }
 
@@ -252,6 +266,7 @@ export class PipelinePoller implements vscode.Disposable {
           const detailGraph = detailResp.data?.executionGraph;
 
           if (detailExec) {
+            this.detailWaitingSince = null; // Found it — stop waiting
             const currentStatus = (detailExec.status as string).toUpperCase();
             detailExec.status = currentStatus;
             const isTerminal = TERMINAL_STATUSES.has(currentStatus);
@@ -303,10 +318,26 @@ export class PipelinePoller implements vscode.Disposable {
             } else {
               anyRunning = true; // Keep polling active
             }
+          } else {
+            // 200 OK but no summary yet (execution not fully created).
+            // Keep polling actively while inside the waiting window.
+            if (this.detailWaitingSince && (Date.now() - this.detailWaitingSince) < WAITING_TIMEOUT_MS) {
+              anyRunning = true;
+            } else {
+              this.detailWaitingSince = null;
+            }
           }
         } catch (error) {
-          console.error('[PipelinePoller] Error fetching detail execution:', error);
-          // Don't fail the whole tick if detail fetch fails
+          // A freshly re-run execution may 404 until it is queryable. Keep
+          // polling actively while inside the waiting window rather than
+          // backing off to the slow heartbeat (which would strand it loading).
+          if (this.detailWaitingSince && (Date.now() - this.detailWaitingSince) < WAITING_TIMEOUT_MS) {
+            anyRunning = true;
+            logger.debug('Poller', 'Detail fetch failed but within waiting window - keeping active poll');
+          } else {
+            this.detailWaitingSince = null;
+            console.error('[PipelinePoller] Error fetching detail execution:', error);
+          }
         }
       }
 
@@ -478,6 +509,15 @@ export class PipelinePoller implements vscode.Disposable {
     } finally {
       logger.debug('Poller', '◼ Tick complete, releasing lock');
       this.isTickRunning = false;
+      // A refresh was requested while this tick was in flight — run it now so
+      // the request (e.g. post re-run/abort) takes effect immediately rather
+      // than waiting for the scheduled timer.
+      if (this.pendingRefresh) {
+        this.pendingRefresh = false;
+        logger.debug('Poller', 'Running queued pending refresh');
+        this.stopTimer();
+        void this.tick();
+      }
     }
   }
 
@@ -511,6 +551,7 @@ export class PipelinePoller implements vscode.Disposable {
     this.detailExecutionId = planExecutionId;
     this.detailLastStatus = null;
     this.detailLastGraphHash = null;
+    this.detailWaitingSince = Date.now(); // allow time for a freshly-created execution to appear
     // Start polling immediately
     this.refresh();
   }
