@@ -57,6 +57,7 @@ export class PipelinePoller implements vscode.Disposable {
   private detailExecutionId: string | null = null;
   private detailLastStatus: string | null = null;
   private detailLastGraphHash: string | null = null; // Track detail execution graph changes
+  private detailWaitingSince: number | null = null; // when we started waiting for a detail execution to appear
 
   // Visibility tracking - pause polling when sidebar is hidden or window unfocused
   private isSidebarVisible: boolean = false;
@@ -84,6 +85,10 @@ export class PipelinePoller implements vscode.Disposable {
   refresh(): void {
     this.lastStatus = null;
     this.lastGraphHash = null;
+    // Reset detail tracking too so a forced refresh re-emits the current
+    // detail execution state (e.g. right after an abort transitions to ABORTED).
+    this.detailLastStatus = null;
+    this.detailLastGraphHash = null;
     this.stopTimer();
     this.tick();
   }
@@ -251,7 +256,18 @@ export class PipelinePoller implements vscode.Disposable {
           const detailExec = detailResp.data?.pipelineExecutionSummary;
           const detailGraph = detailResp.data?.executionGraph;
 
+          if (!detailExec) {
+            // Execution not queryable yet (e.g. just created by a re-run).
+            // Keep polling actively for a window instead of giving up.
+            if (this.detailWaitingSince && (Date.now() - this.detailWaitingSince) < WAITING_TIMEOUT_MS) {
+              anyRunning = true;
+            } else {
+              this.detailWaitingSince = null;
+            }
+          }
+
           if (detailExec) {
+            this.detailWaitingSince = null; // Found it — stop waiting
             const currentStatus = (detailExec.status as string).toUpperCase();
             detailExec.status = currentStatus;
             const isTerminal = TERMINAL_STATUSES.has(currentStatus);
@@ -511,6 +527,7 @@ export class PipelinePoller implements vscode.Disposable {
     this.detailExecutionId = planExecutionId;
     this.detailLastStatus = null;
     this.detailLastGraphHash = null;
+    this.detailWaitingSince = Date.now(); // allow time for a freshly-created execution to appear
     // Start polling immediately
     this.refresh();
   }

@@ -37,7 +37,10 @@ export type WebviewMessage =
   | { type: 'AI_ERROR'; message: string }
   | { type: 'RERUN_SUCCESS'; newPlanExecutionId: string }
   | { type: 'RERUN_CANCELLED' }
-  | { type: 'RERUN_ERROR' };
+  | { type: 'RERUN_ERROR' }
+  | { type: 'ABORT_SUCCESS'; planExecutionId: string }
+  | { type: 'ABORT_CANCELLED' }
+  | { type: 'ABORT_ERROR' };
 
 export class WebviewBridge {
   private view: vscode.WebviewView | undefined;

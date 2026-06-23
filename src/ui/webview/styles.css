@@ -337,6 +337,32 @@ body {
 .theme-enhanced .pip-ibtn.is-loading { color: var(--accent); }
 .theme-enhanced .pip-ibtn-ext { color: var(--accent); }
 .theme-enhanced .pip-ibtn-more { width: 16px; }
+.theme-enhanced .pip-ibtn-abort:hover:not(:disabled) {
+  background: oklch(63% 0.21 25 / 0.12);
+  color: oklch(63% 0.21 25);
+  border-color: oklch(63% 0.21 25 / 0.35);
+}
+
+/* ── Instant hover tooltip (replaces native title which fails on re-render) ── */
+.tip-wrap { position: relative; display: inline-flex; }
+.tip {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  right: 0;
+  background: var(--vscode-editorHoverWidget-background);
+  border: 1px solid var(--vscode-editorHoverWidget-border);
+  color: var(--vscode-editorHoverWidget-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 3px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .12s;
+  z-index: 100;
+}
+.tip-wrap:hover .tip { opacity: 1; }
 .theme-enhanced .btn-spin { display: inline-flex; color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 
 /* Commit message row */
@@ -1662,6 +1688,12 @@ body {
 .exec-rerun-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+.exec-abort-btn {
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+.exec-abort-btn:hover {
+  background: var(--vscode-inputValidation-errorBackground, var(--vscode-list-hoverBackground));
 }
 .exec-link {
   color: var(--vscode-textLink-foreground);

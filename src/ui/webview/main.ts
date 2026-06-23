@@ -604,6 +604,12 @@ window.addEventListener('message', ({ data: msg }) => {
         externalApproval: isTerminal ? undefined : prev?.externalApproval,
         sto: prev?.sto,   ti: prev?.ti,   ssca: prev?.ssca, cd: prev?.cd,
       });
+      // A status change (e.g. RUNNING → ABORTED after an abort) must reflect
+      // immediately rather than waiting for the throttled auto-render window.
+      if (prev && prev.status !== status) {
+        scheduleRender(true);
+        return;
+      }
       break;
     }
 
@@ -857,11 +863,23 @@ window.addEventListener('message', ({ data: msg }) => {
         externalApproval: msg.externalApproval ?? prev?.externalApproval,
         sto: msg.sto,   ti: msg.ti,   ssca: msg.ssca, cd: msg.cd,
       });
+      // Force an immediate render when the execution first loads (prev absent)
+      // or its status changes (e.g. RUNNING → ABORTED), bypassing render throttle.
+      if (!prev || prev.status !== status) {
+        scheduleRender(true);
+        return;
+      }
       break;
     }
 
     case 'NO_EXECUTION':
-      state.loadingExecution = false;
+      // In detail mode the viewed execution is polled separately. The live
+      // poller's "no execution for this commit" signal must NOT clear the
+      // loading state or executions, otherwise a freshly re-run execution
+      // (not yet matched to the commit) renders as "Execution not found".
+      if (state.viewMode !== 'detail') {
+        state.loadingExecution = false;
+      }
       // Only clear executions if we're in live mode
       // Don't interfere with history/detail view
       if (state.viewMode === 'pipelines') {
@@ -1023,6 +1041,16 @@ window.addEventListener('message', ({ data: msg }) => {
     case 'RERUN_ERROR':
       // Re-enable rerun buttons
       document.querySelectorAll<HTMLElement>('[data-action="rerunPipeline"]').forEach(el => {
+        el.removeAttribute('disabled');
+      });
+      scheduleRender(true);
+      return;
+
+    case 'ABORT_SUCCESS':
+    case 'ABORT_CANCELLED':
+    case 'ABORT_ERROR':
+      // Re-enable abort buttons; on success the next poll swaps it to re-run
+      document.querySelectorAll<HTMLElement>('[data-action="abortPipeline"]').forEach(el => {
         el.removeAttribute('disabled');
       });
       scheduleRender(true);
@@ -2760,13 +2788,14 @@ function execCard(ex: ExecState): string {
       firstStageId = stages[0].name || stages[0].nodeUuid;
     }
 
+    const stopIcon = '<svg width="12" height="12" viewBox="0 0 12 12"><rect x="3" y="3" width="6" height="6" rx="1" fill="currentColor"/></svg>';
     const rerunButtons = terminal
-      ? `<button class="pip-ibtn" data-action="rerunPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" data-pipeline-identifier="${esc(ex.pipelineIdentifier)}" data-first-stage-id="${esc(firstStageId)}" title="Re-run pipeline" aria-label="Re-run pipeline">${refreshIcon}</button>
-         <button class="pip-ibtn pip-ibtn-more" title="More re-run options" aria-label="More re-run options" disabled>${chevIcon}</button>`
-      : '';
+      ? `<span class="tip-wrap"><button class="pip-ibtn" data-action="rerunPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" data-pipeline-identifier="${esc(ex.pipelineIdentifier)}" data-first-stage-id="${esc(firstStageId)}" aria-label="Re-run pipeline">${refreshIcon}</button><span class="tip">Re-run pipeline</span></span>
+         <button class="pip-ibtn pip-ibtn-more" aria-label="More re-run options" disabled>${chevIcon}</button>`
+      : `<span class="tip-wrap"><button class="pip-ibtn pip-ibtn-abort" data-action="abortPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" aria-label="Abort pipeline">${stopIcon}</button><span class="tip">Abort pipeline</span></span>`;
 
     const extLink = ex.harnessUrl
-      ? `<a class="pip-ibtn pip-ibtn-ext" data-action="openUrl" data-url="${esc(ex.harnessUrl)}" title="Open in browser" aria-label="Open in browser">${extIcon}</a>`
+      ? `<span class="tip-wrap"><a class="pip-ibtn pip-ibtn-ext" data-action="openUrl" data-url="${esc(ex.harnessUrl)}" aria-label="Open in browser">${extIcon}</a><span class="tip">Open in browser</span></span>`
       : '';
 
     // Trigger icon (user/clock/branch based on triggerType)
@@ -2907,8 +2936,8 @@ function execCard(ex: ExecState): string {
       firstStageId = stages[0].name || stages[0].nodeUuid;
     }
     const rerunButton = terminal
-      ? `<button class="exec-rerun-btn" data-action="rerunPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" data-pipeline-identifier="${esc(ex.pipelineIdentifier)}" data-first-stage-id="${esc(firstStageId)}" title="Re-run pipeline" aria-label="Re-run pipeline">↻</button>`
-      : '';
+      ? `<span class="tip-wrap"><button class="exec-rerun-btn" data-action="rerunPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" data-pipeline-identifier="${esc(ex.pipelineIdentifier)}" data-first-stage-id="${esc(firstStageId)}" aria-label="Re-run pipeline">↻</button><span class="tip">Re-run pipeline</span></span>`
+      : `<span class="tip-wrap"><button class="exec-rerun-btn exec-abort-btn" data-action="abortPipeline" data-plan-execution-id="${esc(ex.planExecutionId)}" aria-label="Abort pipeline">◼</button><span class="tip">Abort pipeline</span></span>`;
     const harnessLink = ex.harnessUrl
       ? `<a class="exec-link" data-action="openUrl" data-url="${esc(ex.harnessUrl)}" title="Open in Harness">↗</a>`
       : '';
@@ -4117,6 +4146,15 @@ function bind(): void {
       if (!planExecutionId || !pipelineIdentifier) return;
       el.setAttribute('disabled', 'true');
       vscode.postMessage({ type: 'rerunPipeline', planExecutionId, pipelineIdentifier, firstStageId });
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="abortPipeline"]').forEach(el => {
+    el.addEventListener('click', () => {
+      const planExecutionId = el.dataset['planExecutionId'];
+      if (!planExecutionId) return;
+      el.setAttribute('disabled', 'true');
+      vscode.postMessage({ type: 'abortPipeline', planExecutionId });
     });
   });
 
