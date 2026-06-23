@@ -1,7 +1,7 @@
 # Harness for VS Code
 
-[![Visual Studio Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/harness-inc.harness-vscode?label=VS%20Code%20Marketplace&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=harness-inc.harness-vscode)
-[![Visual Studio Marketplace Installs](https://img.shields.io/visual-studio-marketplace/i/harness-inc.harness-vscode?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=harness-inc.harness-vscode)
+[![VS Code Marketplace](https://vsmarketplacebadges.dev/version-short/harness-inc.harness-vscode.svg?label=VS%20Code%20Marketplace&color=00ADE4)](https://marketplace.visualstudio.com/items?itemName=harness-inc.harness-vscode)
+[![Installs](https://vsmarketplacebadges.dev/installs-short/harness-inc.harness-vscode.svg?color=00ADE4)](https://marketplace.visualstudio.com/items?itemName=harness-inc.harness-vscode)
 
 **Monitor CI/CD pipelines, view logs, and manage approvals — all without leaving your IDE.**
 
