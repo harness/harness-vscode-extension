@@ -187,8 +187,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     poller = new PipelinePoller(currentClient, config, diagnostics, bridge, outputChannel);
     poller.start();
 
-    // Initialize poller with current window focus state
+    // Initialize poller with current window focus + sidebar visibility state.
+    // Visibility events only fire on change, so a poller created after an
+    // org/project switch would otherwise assume the sidebar is hidden and
+    // skip every tick (defaults to isSidebarVisible=false).
     poller.setWindowFocused(vscode.window.state.focused);
+    poller.setSidebarVisible(sidebarProvider.isVisible());
   }
 
   // Route webview messages back to VS Code commands

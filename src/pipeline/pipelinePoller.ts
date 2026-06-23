@@ -65,6 +65,10 @@ export class PipelinePoller implements vscode.Disposable {
 
   // Re-entrancy guard - prevent concurrent tick() executions
   private isTickRunning: boolean = false;
+  // Set when a tick is requested while one is already running (e.g. refresh()
+  // right after a re-run/abort). The in-flight tick re-runs once on completion
+  // so the requested refresh is never silently dropped.
+  private pendingRefresh: boolean = false;
 
   constructor(
     private readonly client: HarnessClient,
@@ -217,9 +221,14 @@ export class PipelinePoller implements vscode.Disposable {
   }
 
   private async tick(): Promise<void> {
-    // Prevent concurrent executions - if tick is already running, skip this call
+    // Prevent concurrent executions - if tick is already running, queue a
+    // follow-up instead of dropping it. Otherwise a refresh() issued during an
+    // in-flight tick (e.g. right after a re-run/abort) is lost, and the stale
+    // in-flight tick reschedules at the slow heartbeat — stranding the newly
+    // registered detail execution on "loading" for up to 2 minutes.
     if (this.isTickRunning) {
-      logger.debug('Poller', 'Skipping tick - already running');
+      logger.debug('Poller', 'Tick already running - queueing pending refresh');
+      this.pendingRefresh = true;
       return;
     }
 
@@ -255,16 +264,6 @@ export class PipelinePoller implements vscode.Disposable {
 
           const detailExec = detailResp.data?.pipelineExecutionSummary;
           const detailGraph = detailResp.data?.executionGraph;
-
-          if (!detailExec) {
-            // Execution not queryable yet (e.g. just created by a re-run).
-            // Keep polling actively for a window instead of giving up.
-            if (this.detailWaitingSince && (Date.now() - this.detailWaitingSince) < WAITING_TIMEOUT_MS) {
-              anyRunning = true;
-            } else {
-              this.detailWaitingSince = null;
-            }
-          }
 
           if (detailExec) {
             this.detailWaitingSince = null; // Found it — stop waiting
@@ -319,10 +318,26 @@ export class PipelinePoller implements vscode.Disposable {
             } else {
               anyRunning = true; // Keep polling active
             }
+          } else {
+            // 200 OK but no summary yet (execution not fully created).
+            // Keep polling actively while inside the waiting window.
+            if (this.detailWaitingSince && (Date.now() - this.detailWaitingSince) < WAITING_TIMEOUT_MS) {
+              anyRunning = true;
+            } else {
+              this.detailWaitingSince = null;
+            }
           }
         } catch (error) {
-          console.error('[PipelinePoller] Error fetching detail execution:', error);
-          // Don't fail the whole tick if detail fetch fails
+          // A freshly re-run execution may 404 until it is queryable. Keep
+          // polling actively while inside the waiting window rather than
+          // backing off to the slow heartbeat (which would strand it loading).
+          if (this.detailWaitingSince && (Date.now() - this.detailWaitingSince) < WAITING_TIMEOUT_MS) {
+            anyRunning = true;
+            logger.debug('Poller', 'Detail fetch failed but within waiting window - keeping active poll');
+          } else {
+            this.detailWaitingSince = null;
+            console.error('[PipelinePoller] Error fetching detail execution:', error);
+          }
         }
       }
 
@@ -494,6 +509,15 @@ export class PipelinePoller implements vscode.Disposable {
     } finally {
       logger.debug('Poller', '◼ Tick complete, releasing lock');
       this.isTickRunning = false;
+      // A refresh was requested while this tick was in flight — run it now so
+      // the request (e.g. post re-run/abort) takes effect immediately rather
+      // than waiting for the scheduled timer.
+      if (this.pendingRefresh) {
+        this.pendingRefresh = false;
+        logger.debug('Poller', 'Running queued pending refresh');
+        this.stopTimer();
+        void this.tick();
+      }
     }
   }
 

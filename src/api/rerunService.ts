@@ -74,7 +74,11 @@ export async function rerunPipeline(
   const stageIdToUse = correctStageId || firstStageId;
   if (stageIdToUse) {
     params.append('retryStages', stageIdToUse);
-    logger.debug('RerunService', 'Using retryStages', { stageId: stageIdToUse });
+    // Retrying from the first stage means "re-run the whole pipeline from
+    // scratch". runAllStages=true ensures all stages run from the retry point
+    // (vs. only re-running previously failed stages/parallel groups).
+    params.append('runAllStages', 'true');
+    logger.debug('RerunService', 'Using retryStages', { stageId: stageIdToUse, runAllStages: true });
   } else {
     logger.warn('RerunService', 'No stage ID available - this will likely fail');
   }
