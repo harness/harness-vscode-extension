@@ -115,7 +115,7 @@ export async function dispatchModules(
       : undefined;
     const stoScan = parseStoScan(executionGraph, planExecutionId, stoUrl);
     if (stoScan) {
-      webview.send({ type: 'STO_SCAN', stoScan });
+      webview.send({ type: 'STO_SCAN', planExecutionId, stoScan });
     }
   } catch (e) {
     logger.error('Harness', 'STO scan parse error:', e);

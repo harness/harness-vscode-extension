@@ -534,6 +534,8 @@ body {
   margin-bottom: -1px;
 }
 .theme-enhanced .tab:hover { color: var(--fg-0); background: var(--bg-1); }
+.theme-enhanced .tab.is-disabled { opacity: 0.5; cursor: default; }
+.theme-enhanced .tab.is-disabled:hover { color: var(--fg-2); background: transparent; }
 .theme-enhanced .tab.on {
   color: var(--accent);
   border-bottom-color: var(--accent);

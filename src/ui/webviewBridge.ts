@@ -12,7 +12,7 @@ export type WebviewMessage =
   | { type: 'STO_SUMMARY';      count: number; high: number; medium: number; critical: number }
   | { type: 'TI_SUMMARY';       failed: number; flaky: number; selected: number; total: number }
   | { type: 'SSCA_SUMMARY';     flagged: number }
-  | { type: 'STO_SCAN';         stoScan: import('../api/stoScan').StoScanSummary }
+  | { type: 'STO_SCAN';         planExecutionId: string; stoScan: import('../api/stoScan').StoScanSummary }
   | { type: 'AIDA_UPDATE';      stageId: string; rca: AidaRca }
   | { type: 'OPA_UPDATE';       policy: PolicyEvaluation }
   | { type: 'CCM_UPDATE';       cost: BuildCost }

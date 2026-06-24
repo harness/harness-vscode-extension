@@ -65,6 +65,15 @@ function getStateFingerprint(): string {
         .join(',');
       parts.push(`steps:${stepStatuses}`);
     }
+
+    // Add STO scan totals + new-vuln counts so the Security tab/badge re-renders
+    // when scan results arrive mid-run (status/steps may be unchanged that tick).
+    if (ex.stoScan) {
+      const s = ex.stoScan;
+      parts.push(`sto:${s.running ? 1 : 0}:${s.skipped ? 1 : 0}:` +
+        (['critical', 'high', 'medium', 'low', 'info', 'exempted'] as const)
+          .map(k => `${s[k].total}/${s[k].new}`).join(','));
+    }
   }
 
   // Add expanded state
@@ -645,6 +654,7 @@ window.addEventListener('message', ({ data: msg }) => {
         approval: isTerminal ? undefined : prev?.approval,
         externalApproval: isTerminal ? undefined : prev?.externalApproval,
         sto: prev?.sto,   ti: prev?.ti,   ssca: prev?.ssca, cd: prev?.cd,
+        stoScan: prev?.stoScan,
       });
       // A status change (e.g. RUNNING → ABORTED after an abort) must reflect
       // immediately rather than waiting for the throttled auto-render window.
@@ -775,9 +785,13 @@ window.addEventListener('message', ({ data: msg }) => {
       }
       break;
 
-    case 'STO_SCAN':
-      for (const [, ex] of state.executions) { ex.stoScan = (msg as any).stoScan; }
+    case 'STO_SCAN': {
+      // Scope to the specific execution so one run's findings can't bleed onto
+      // another cached execution (e.g. while browsing history).
+      const target = state.executions.get((msg as any).planExecutionId);
+      if (target) target.stoScan = (msg as any).stoScan;
       break;
+    }
 
     case 'TI_SUMMARY':
       for (const [, ex] of state.executions) {
@@ -908,6 +922,7 @@ window.addEventListener('message', ({ data: msg }) => {
         approval: msg.approval ?? prev?.approval,
         externalApproval: msg.externalApproval ?? prev?.externalApproval,
         sto: msg.sto,   ti: msg.ti,   ssca: msg.ssca, cd: msg.cd,
+        stoScan: prev?.stoScan,
       });
       // Force an immediate render when the execution first loads (prev absent)
       // or its status changes (e.g. RUNNING → ABORTED), bypassing render throttle.
@@ -3311,11 +3326,13 @@ function execCard(ex: ExecState): string {
       tabs.push(tabBtn('sec', 'Security', badge));
     }
 
-    // Tests tab (TI module)
+    // Tests tab (TI module) — visible but not yet interactive (no tab body
+    // implemented). Rendered without data-action so it can't switch to a dead
+    // body; the count badge still surfaces failures.
     if (mi?.ti || ex.ti) {
       const failCount = ex.ti?.failed || 0;
       const badge = failCount > 0 ? `<span class="tab-badge warn">${failCount}</span>` : '';
-      tabs.push(tabBtn('ti', 'Tests', badge));
+      tabs.push(`<button class="tab is-disabled" disabled title="Tests detail coming soon">Tests${badge}</button>`);
     }
 
     if (tabs.length > 1) {

@@ -3,7 +3,7 @@
   "displayName": "Harness",
   "description": "Monitor Harness pipelines, view logs, and manage approvals directly in VS Code. Real-time CI/CD visibility without context switching.",
   "version": "0.1.8",
-  "publisher": "harness-inc",
+  "publisher": "harness",
   "engines": {
     "vscode": "^1.85.0"
   },
