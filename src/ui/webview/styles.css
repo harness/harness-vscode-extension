@@ -363,6 +363,20 @@ body {
   z-index: 100;
 }
 .tip-wrap:hover .tip { opacity: 1; }
+/* Highlight the wrapped arrow/link on direct hover (mirrors the icon-button
+   treatment used for rerun/abort). */
+.theme-enhanced .tip-wrap > .step-ext,
+.theme-enhanced .tip-wrap > .opa-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-sm);
+  padding: 2px; transition: background .12s, color .12s;
+}
+.theme-enhanced .tip-wrap:hover > .step-ext,
+.theme-enhanced .tip-wrap:hover > .opa-link {
+  background: var(--accent-soft);
+  color: var(--accent);
+  opacity: 1;
+}
 .theme-enhanced .btn-spin { display: inline-flex; color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 
 /* Commit message row */
@@ -520,6 +534,8 @@ body {
   margin-bottom: -1px;
 }
 .theme-enhanced .tab:hover { color: var(--fg-0); background: var(--bg-1); }
+.theme-enhanced .tab.is-disabled { opacity: 0.5; cursor: default; }
+.theme-enhanced .tab.is-disabled:hover { color: var(--fg-2); background: transparent; }
 .theme-enhanced .tab.on {
   color: var(--accent);
   border-bottom-color: var(--accent);
@@ -535,6 +551,152 @@ body {
   line-height: 1.2;
 }
 .theme-enhanced .tab-badge.warn { background: var(--warn); color: var(--bg-0); }
+
+/* ── Security tab ────────────────────────────────────────────────── */
+/* Match the pip-card's horizontal inset (margin: 0 10px) so tab bodies line
+   up with the header card above and never overrun the right edge. Use margin
+   (not padding) for the side inset so inner cards can't add to the width. */
+.theme-enhanced .tb { display: flex; flex-direction: column; gap: 10px; padding: 10px 0; margin: 0 10px; min-width: 0; }
+/* Every flex descendant must allow shrinking below content width, otherwise
+   nowrap monospace strings (image name, sha256 digest) force cards to overflow
+   the panel on the right. This is the ellipsis-enabling rule for the chain. */
+.theme-enhanced .tb *, .theme-enhanced .tb *::before, .theme-enhanced .tb *::after { min-width: 0; }
+.theme-enhanced .tb-sec { gap: 10px; }
+
+.theme-enhanced .sec-skipped { display:flex; gap:12px; align-items:center; padding:16px; background:var(--bg-1); border:1px solid var(--line); border-radius:var(--r); color:var(--fg-2); }
+.theme-enhanced .sec-skipped > svg { color:var(--fg-3); flex-shrink:0; }
+.theme-enhanced .sec-skipped-t { font-size:12.5px; font-weight:600; color:var(--fg-1); margin-bottom:3px; }
+.theme-enhanced .sec-skipped-d { font-size:11px; color:var(--fg-3); }
+
+.theme-enhanced .sec-scan-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; background:var(--bg-1); border:1px solid var(--line); border-radius:var(--r); }
+.theme-enhanced .sec-scan-l { display:flex; align-items:center; gap:8px; color:var(--fg-2); font-size:11px; }
+.theme-enhanced .sec-scan-l > svg { color:var(--accent); }
+.theme-enhanced .sec-scan-id { color:var(--fg-1); font-size:10.5px; }
+.theme-enhanced .sec-scan-ttl { color:var(--fg-1); font-size:11px; font-weight:600; }
+.theme-enhanced .sec-scan-live { display:inline-flex; align-items:center; gap:5px; color:var(--accent); font-size:10.5px; font-weight:500; }
+.theme-enhanced .sec-scan-live-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); animation:pulse 1.4s ease-in-out infinite; }
+.theme-enhanced .sec-scan-r { display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; }
+.theme-enhanced .sec-tool { font-size:9.5px; font-family:var(--font-mono); color:var(--fg-2); background:var(--bg-2); padding:2px 6px; border-radius:3px; border:1px solid var(--line); }
+
+.theme-enhanced .sec-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
+.theme-enhanced .sev { position:relative; display:flex; flex-direction:column; gap:2px; padding:10px 11px; border-radius:var(--r); border:1px solid transparent; background:var(--bg-2); color:var(--fg-1); cursor:pointer; transition:transform .12s, border-color .12s, filter .12s; text-align:left; font-family:inherit; min-height:66px; }
+.theme-enhanced .sev:hover { transform:translateY(-1px); filter:brightness(1.05); }
+.theme-enhanced .sev-lbl { font-size:10.5px; font-weight:600; text-transform:capitalize; letter-spacing:0.01em; }
+.theme-enhanced .sev-n { font-family:var(--font-mono); font-size:22px; font-weight:700; line-height:1.1; letter-spacing:-0.02em; }
+.theme-enhanced .sev-top { display:flex; align-items:center; justify-content:space-between; gap:5px; flex-wrap:wrap; }
+.theme-enhanced .sev-new { font-size:9.5px; font-weight:600; display:inline-flex; align-items:center; gap:3px; padding:2px 6px; border-radius:var(--r-pill); background:var(--bg-0); border:1px solid currentColor; flex-shrink:0; white-space:nowrap; }
+.theme-enhanced .sev-new-arrow { font-size:7px; line-height:1; }
+
+.theme-enhanced .sev-crit { background:oklch(68% 0.21 22 / 0.10); border-color:oklch(68% 0.21 22 / 0.25); color:oklch(80% 0.18 22); }
+.theme-enhanced .sev-crit .sev-n { color:oklch(78% 0.20 22); }
+.theme-enhanced .sev-high { background:oklch(80% 0.17 50 / 0.10); border-color:oklch(80% 0.17 50 / 0.25); color:oklch(85% 0.16 50); }
+.theme-enhanced .sev-high .sev-n { color:oklch(82% 0.18 50); }
+.theme-enhanced .sev-med { background:oklch(85% 0.16 85 / 0.10); border-color:oklch(85% 0.16 85 / 0.25); color:oklch(88% 0.15 85); }
+.theme-enhanced .sev-med .sev-n { color:oklch(88% 0.17 85); }
+.theme-enhanced .sev-low { background:oklch(74% 0.13 265 / 0.10); border-color:oklch(74% 0.13 265 / 0.25); color:oklch(82% 0.12 265); }
+.theme-enhanced .sev-low .sev-n { color:oklch(82% 0.13 265); }
+.theme-enhanced .sev-info { background:var(--bg-2); border-color:var(--line); color:var(--fg-2); }
+.theme-enhanced .sev-info .sev-n { color:var(--fg-1); }
+.theme-enhanced .sev-exempt { background:var(--bg-2); border-color:var(--line); color:var(--fg-2); }
+.theme-enhanced .sev-exempt .sev-n { color:var(--fg-1); }
+.theme-enhanced .sev.is-empty { filter:grayscale(0.4); opacity:0.72; }
+.theme-enhanced .sev.is-empty:hover { filter:grayscale(0) brightness(1.05); opacity:1; }
+
+.theme-enhanced .sec-total { background:var(--bg-1); border:1px solid var(--line); border-radius:var(--r); padding:9px 12px; display:flex; flex-direction:column; gap:6px; }
+.theme-enhanced .sec-total-row { display:flex; align-items:center; justify-content:space-between; font-size:11.5px; }
+.theme-enhanced .sec-total-l { color:var(--fg-2); display:inline-flex; align-items:center; gap:5px; }
+.theme-enhanced .sec-total-n { font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--fg-0); letter-spacing:-0.01em; }
+.theme-enhanced .sec-total-row-new .sec-total-l { color:oklch(78% 0.18 40); }
+.theme-enhanced .sec-total-n-new { color:oklch(82% 0.20 40); }
+.theme-enhanced .sec-new-ic { font-size:8px; color:oklch(78% 0.20 40); }
+
+.theme-enhanced .sec-sto-btn { display:flex; align-items:center; gap:9px; padding:10px 12px; background:var(--accent-soft); border:1px solid var(--accent-ring); border-radius:var(--r); color:var(--accent); text-decoration:none; font-size:12px; font-weight:600; cursor:pointer; transition:background .12s, border-color .12s; }
+.theme-enhanced .sec-sto-btn:hover { background:oklch(78% 0.13 200 / 0.18); border-color:var(--accent); }
+.theme-enhanced .sec-sto-btn > svg:first-child { flex-shrink:0; }
+.theme-enhanced .sec-sto-l { flex:1; }
+.theme-enhanced .sec-sto-btn > svg:last-child { opacity:0.7; }
+
+.theme-enhanced .sec-meta { font-size:10.5px; color:var(--fg-3); line-height:1.5; padding:2px 4px; }
+
+/* ── Build / Deploy tabs ─────────────────────────────────────────── */
+.theme-enhanced .tb-build, .theme-enhanced .tb-deploy { gap:10px; }
+.theme-enhanced .tb-empty-line { font-size:10.5px; color:var(--fg-3); }
+
+/* Build: single consolidated card with KV rows */
+.theme-enhanced .tb-stage { background:var(--bg-1); border:1px solid var(--line); border-radius:var(--r); padding:10px 12px; display:flex; flex-direction:column; gap:9px; }
+.theme-enhanced .tb-kv { display:flex; gap:10px; font-size:11.5px; align-items:flex-start; }
+.theme-enhanced .tb-k { flex:0 0 78px; color:var(--fg-3); font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; font-weight:500; padding-top:1px; }
+.theme-enhanced .tb-k-n { font-family:var(--font-mono); color:var(--fg-2); background:var(--bg-2); padding:0 4px; border-radius:3px; font-size:9.5px; margin-left:4px; letter-spacing:0; text-transform:none; }
+.theme-enhanced .tb-v-repo { color:var(--fg-0); font-weight:500; }
+.theme-enhanced .tb-v-repo svg { color:var(--fg-3); flex-shrink:0; }
+.theme-enhanced .tb-v { color:var(--fg-1); display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.theme-enhanced .tb-v > svg { color:var(--fg-3); flex-shrink:0; }
+.theme-enhanced .tb-kv-stack { flex-direction:column; gap:5px; align-items:stretch; }
+.theme-enhanced .tb-kv-stack > .tb-k { flex:0 0 auto; }
+
+.theme-enhanced .tb-pr-inline { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; color:var(--accent); text-decoration:none; font-family:var(--font-mono); background:var(--accent-soft); border:1px solid var(--accent-ring); padding:1px 6px; border-radius:var(--r-pill); }
+
+.theme-enhanced .tb-commits { display:flex; flex-direction:column; gap:4px; }
+.theme-enhanced .tb-commit { display:grid; grid-template-columns:58px 1fr auto; gap:8px; align-items:center; padding:5px 7px; background:var(--bg-2); border:1px solid transparent; border-radius:var(--r-sm); font-size:11px; color:var(--fg-1); text-decoration:none; transition:background .12s, border-color .12s; }
+.theme-enhanced .tb-commit:hover { background:var(--bg-3); border-color:var(--line-2); }
+.theme-enhanced .tb-commit-sha { font-family:var(--font-mono); font-size:10px; color:var(--accent); text-decoration:none; flex-shrink:0; }
+.theme-enhanced a.tb-commit-sha { cursor:pointer; }
+.theme-enhanced a.tb-commit-sha:hover { text-decoration:underline; }
+.theme-enhanced .tb-commit-msg { color:var(--fg-1); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.theme-enhanced .tb-commit-author { color:var(--fg-3); font-size:10px; flex-shrink:0; }
+
+.theme-enhanced .tb-arts { display:flex; flex-direction:column; gap:6px; }
+.theme-enhanced .tb-art { display:flex; align-items:center; gap:10px; padding:9px 11px; background:var(--bg-2); border:1px solid var(--line); border-radius:var(--r); }
+.theme-enhanced .tb-art.is-failed { border-color:oklch(68% 0.21 22 / 0.4); }
+.theme-enhanced .tb-art-ic { color:var(--accent); flex-shrink:0; display:inline-flex; align-items:center; }
+.theme-enhanced .tb-art-main { display:flex; flex-direction:column; gap:3px; min-width:0; flex:1; }
+.theme-enhanced .tb-art-top { display:flex; align-items:center; gap:8px; min-width:0; }
+.theme-enhanced .tb-art-name { font-size:11.5px; font-weight:600; color:var(--fg-0); font-family:var(--font-mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.theme-enhanced .tb-art-ver { font-size:10px; font-family:var(--font-mono); color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-ring); padding:1px 6px; border-radius:3px; flex-shrink:0; }
+.theme-enhanced .tb-art-reg { font-size:9.5px; color:var(--fg-3); font-family:var(--font-mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.theme-enhanced .tb-art-ext { color:var(--fg-3); flex-shrink:0; display:inline-flex; align-items:center; cursor:pointer; }
+.theme-enhanced .tb-art-ext:hover { color:var(--accent); }
+
+/* Deploy: one card per CD stage */
+.theme-enhanced .tb-cd-rollup { display:flex; align-items:center; gap:7px; padding:6px 10px; background:var(--bg-1); border:1px solid var(--line); border-radius:var(--r); font-size:11px; color:var(--fg-2); }
+.theme-enhanced .tb-cd-rollup-n { font-family:var(--font-mono); font-weight:600; color:var(--fg-0); }
+.theme-enhanced .tb-cd-rollup-sep { color:var(--fg-3); }
+.theme-enhanced .tb-cd-rollup-l { color:var(--fg-2); }
+
+.theme-enhanced .tb-cd-stage { background:var(--bg-1); border:1px solid var(--line); border-radius:var(--r); padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
+.theme-enhanced .tb-cd-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.theme-enhanced .tb-cd-name { font-size:12px; font-weight:600; color:var(--fg-0); }
+.theme-enhanced .tb-stage-chip { font-size:9.5px; font-weight:600; padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.02em; border:1px solid transparent; }
+.theme-enhanced .tb-stage-chip.is-ok { background:oklch(72% 0.16 150 / 0.12); color:oklch(80% 0.15 150); border-color:oklch(72% 0.16 150 / 0.3); }
+.theme-enhanced .tb-stage-chip.is-failed { background:oklch(68% 0.21 22 / 0.12); color:oklch(80% 0.18 22); border-color:oklch(68% 0.21 22 / 0.3); }
+.theme-enhanced .tb-stage-chip.is-blocked { background:var(--bg-2); color:var(--fg-3); border-color:var(--line); }
+.theme-enhanced .tb-stage-chip.is-waiting { background:oklch(80% 0.14 85 / 0.12); color:oklch(85% 0.14 85); border-color:oklch(80% 0.14 85 / 0.3); }
+.theme-enhanced .tb-stage-chip.is-pending { background:var(--bg-2); color:var(--fg-3); border-color:var(--line); }
+
+.theme-enhanced .tb-skip { font-size:10.5px; color:var(--fg-3); padding:0 2px 4px; line-height:1.45; }
+
+.theme-enhanced .tb-svcs, .theme-enhanced .tb-envs { display:flex; flex-direction:column; gap:6px; }
+.theme-enhanced .tb-svc { display:flex; flex-direction:column; gap:3px; }
+.theme-enhanced .tb-svc-row { display:flex; align-items:center; gap:8px; font-size:11px; }
+.theme-enhanced .tb-svc-ic { color:var(--accent); display:inline-flex; align-items:center; flex-shrink:0; }
+.theme-enhanced .tb-svc-name { font-weight:600; color:var(--fg-1); flex:1; }
+.theme-enhanced .tb-svc-kind { font-size:9.5px; color:var(--fg-2); background:var(--bg-2); border:1px solid var(--line); padding:1px 6px; border-radius:3px; }
+.theme-enhanced .tb-svc-ver { font-size:10px; color:var(--fg-3); }
+.theme-enhanced .tb-manifests { display:flex; flex-wrap:wrap; gap:4px; padding-left:20px; margin-top:4px; }
+.theme-enhanced .tb-manifest { font-size:9.5px; font-family:var(--font-mono); color:var(--fg-2); background:var(--bg-2); border:1px solid var(--line); padding:1px 6px; border-radius:3px; }
+
+.theme-enhanced .tb-env { display:flex; align-items:center; gap:7px; font-size:11px; padding-top:6px; border-top:1px solid var(--line); }
+.theme-enhanced .tb-env-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; background:var(--fg-3); }
+.theme-enhanced .tb-env-dot.is-ok { background:oklch(72% 0.16 150); }
+.theme-enhanced .tb-env-dot.is-failed { background:oklch(68% 0.21 22); }
+.theme-enhanced .tb-env-dot.is-waiting { background:oklch(80% 0.14 85); }
+.theme-enhanced .tb-env-dot.is-blocked { background:var(--fg-3); }
+.theme-enhanced .tb-env-dot.is-pending { background:var(--fg-3); }
+.theme-enhanced .tb-env-name { font-weight:600; color:var(--fg-1); }
+.theme-enhanced .tb-env-meta { color:var(--fg-3); font-size:10px; flex:1; }
+.theme-enhanced .tb-env-at { color:var(--fg-3); font-size:10px; flex-shrink:0; }
+.theme-enhanced .tb-env-ext { color:var(--fg-3); display:inline-flex; align-items:center; flex-shrink:0; margin-left:6px; cursor:pointer; }
+.theme-enhanced .tb-env-ext:hover { color:var(--accent); }
 
 /* ── Approval Card (Amber Palette) ───────────────────────────────── */
 /* CRITICAL: Amber/gold accent — explicit user decision, NOT rose, NOT blue */
@@ -1669,6 +1831,9 @@ body {
   cursor: default;
 }
 .exec-header[data-action] { cursor: pointer; }
+/* Clickable links/buttons driven by data-action (anchors without href don't
+   get a pointer cursor by default). */
+a[data-action="openUrl"] { cursor: pointer; }
 .exec-header:hover { background: var(--vscode-list-hoverBackground); }
 .exec-rerun-btn {
   background: transparent;

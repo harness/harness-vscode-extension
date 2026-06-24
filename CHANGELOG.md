@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.8] - 2026-06-23
+
+### Added
+- **Re-run pipeline**: Re-run a finished execution with its original inputs via the retry API (inputSet YAML + first-stage `retryStages` + `runAllStages`); confirmation dialog and auto-navigation to the new execution
+- **Abort execution**: Abort a running pipeline with interrupt-type selection (Abort All / Mark as Failed); the action button adapts to execution status
+- **Build tab**: Repository, branch (and PR), commits, and published image/SBOM artifacts — parsed from `moduleInfo.ci`
+- **Deploy tab**: Per CD stage services (with manifests), environments, and skip reasons — parsed from `layoutNodeMap`
+- **Security tab**: STO scanner results with per-severity tiles and new-vulnerability deltas, parsed from the execution graph (no extra API call)
+- Instant hover tooltips + highlight on re-run/abort buttons, step "View step logs" arrows, and the policy-evaluation link
+
+### Changed
+- Publisher identifier set to `harness-inc` (marketplace ID `harness-inc.harness-vscode`)
+
+### Fixed
+- **Pipeline re-run** was returning errors — fixed by using the correct retry endpoint (`POST /pipeline/api/pipeline/execute/retry/{pipelineIdentifier}` with `planExecutionId` in the query), passing the original execution's inputSet YAML, resolving the YAML stage identifier from the `retryStages` API, and reading the new execution ID from `data.planExecution.uuid`
+- Re-run/abort no longer strand the detail view on "loading" — poller queues a `pendingRefresh` when a refresh is requested mid-tick, and keeps actively polling a freshly-created execution that is not yet queryable (404 window)
+- Aborted/terminal status now renders immediately instead of waiting for the render throttle
+- A poller created after an org/project switch is seeded with current sidebar visibility, so it no longer skips every tick (re-run/abort failing to update after switching projects)
+- Native button tooltips that never appeared (destroyed by ~2s re-renders) replaced with instant CSS tooltips; re-run/abort button re-enables after cancel/error
+
 ## [0.1.7] - 2026-05-27
 
 ### Fixed

@@ -1,5 +1,8 @@
 # Harness for VS Code
 
+[![VS Code Marketplace](https://vsmarketplacebadges.dev/version-short/harness-inc.harness-vscode.svg?label=VS%20Code%20Marketplace&color=00ADE4)](https://marketplace.visualstudio.com/items?itemName=harness-inc.harness-vscode)
+[![Installs](https://vsmarketplacebadges.dev/installs-short/harness-inc.harness-vscode.svg?color=00ADE4)](https://marketplace.visualstudio.com/items?itemName=harness-inc.harness-vscode)
+
 **Monitor CI/CD pipelines, view logs, and manage approvals — all without leaving your IDE.**
 
 Bring Harness directly into VS Code. See real-time pipeline status, debug failures with syntax-highlighted logs, approve deployments, and get AI-powered insights — zero context switching required.
@@ -20,6 +23,15 @@ Handle Harness native, Jira, and ServiceNow approval gates directly in your edit
 ### 🔍 **Smart Search & Filtering**
 Browse all pipelines, filter by status, pin favorites, and explore execution history with pagination. Works with or without a git repository.
 
+### 🔁 **Re-run & Abort**
+Re-run a finished execution with its original inputs in one click, or abort a running pipeline (Abort All / Mark as Failed) — the action button adapts to the execution's status and the view follows the new run.
+
+### 🧭 **Build, Deploy & Security Tabs**
+Drill into an execution with dedicated detail tabs:
+- **Build** — repository, branch (and PR), commits, and published image/SBOM artifacts.
+- **Deploy** — per-stage services (with manifests) and environments, plus skip reasons.
+- **Security** — STO scanner results with per-severity tiles and new-vulnerability deltas, parsed straight from the execution.
+
 ### 🤖 **AI-Powered Debugging**
 Ask Claude Code, GitHub Copilot, or Cursor AI about pipeline failures with automatic context injection. No copy-pasting needed.
 
@@ -36,7 +48,7 @@ Ask Claude Code, GitHub Copilot, or Cursor AI about pipeline failures with autom
 
 **From Command Line:**
 ```bash
-code --install-extension harness.harness-vscode
+code --install-extension harness-inc.harness-vscode
 ```
 
 ### Quick Setup (2 minutes)

@@ -15,6 +15,7 @@ import { applySSCA, summariseSSCA } from '../features/sscaAnnotations';
 // AIDA imports - disabled (endpoint 404)
 // import { getAidaRca } from '../api/aidaService';
 import { getBuildCost } from '../api/ccmService';
+import { parseStoScan } from '../api/stoScan';
 import { canCurrentUserApprove } from '../api/userService';
 import { logger } from '../utils/logger';
 
@@ -102,19 +103,23 @@ export async function dispatchModules(
     }
   }
 
-  // STO: vulnerability findings — DISABLED (will be implemented later)
-  // When STO steps run inside a CI stage, moduleInfo.sto is absent but the
-  // /sto/api/v1/issues endpoint still returns findings. It returns [] when
-  // there are none, so calling it unconditionally is safe.
-  // if (['SUCCESS', 'FAILED'].includes(status)) {
-  //   try {
-  //     const findings = await getStoFindings(client, planExecutionId);
-  //     applySTO(findings, config.diffAwareSTO, diagnostics);
-  //     webview.send({ type: 'STO_SUMMARY', ...summariseSTO(findings) });
-  //   } catch (e) {
-  //     console.error('[Harness] STO dispatch error:', e);
-  //   }
-  // }
+  // STO: vulnerability counts parsed from the execution graph (NOT the issues API).
+  // executionGraph is already in hand — no fetch. The per-CVE issue list lives
+  // behind /sto/api/v1/issues (getStoFindings/applySTO, still disabled) and is a
+  // separate concern; this only surfaces the aggregate severity counts + deltas.
+  try {
+    // STO deep-link shares the execution URL but ends in /security instead of
+    // /pipeline (e.g. .../deployments/{planExecutionId}/security).
+    const stoUrl = harnessUrl
+      ? harnessUrl.replace(/\/pipeline$/, '/security')
+      : undefined;
+    const stoScan = parseStoScan(executionGraph, planExecutionId, stoUrl);
+    if (stoScan) {
+      webview.send({ type: 'STO_SCAN', planExecutionId, stoScan });
+    }
+  } catch (e) {
+    logger.error('Harness', 'STO scan parse error:', e);
+  }
 
   // TI: test results + flaky flags
   if (moduleInfo.ti) {

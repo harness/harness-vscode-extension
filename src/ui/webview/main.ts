@@ -65,6 +65,15 @@ function getStateFingerprint(): string {
         .join(',');
       parts.push(`steps:${stepStatuses}`);
     }
+
+    // Add STO scan totals + new-vuln counts so the Security tab/badge re-renders
+    // when scan results arrive mid-run (status/steps may be unchanged that tick).
+    if (ex.stoScan) {
+      const s = ex.stoScan;
+      parts.push(`sto:${s.running ? 1 : 0}:${s.skipped ? 1 : 0}:` +
+        (['critical', 'high', 'medium', 'low', 'info', 'exempted'] as const)
+          .map(k => `${s[k].total}/${s[k].new}`).join(','));
+    }
   }
 
   // Add expanded state
@@ -153,12 +162,36 @@ interface LayoutNode {
   status: string;
   nodeGroup?: string;
   nodeType?: string;
+  nodeIdentifier?: string;
   stepType?: string;
+  module?: string;            // 'ci' | 'cd' | … — present on stage layout nodes
+  moduleInfo?: Record<string, any>; // module rollup (cd.serviceInfo, cd.infraExecutionSummary, …)
+  nodeRunInfo?: { whenCondition?: string; evaluatedCondition?: boolean; expressions?: unknown[] };
   startTs?: number;
   endTs?: number;
   edgeLayoutList?: { currentNodeChildren?: string[]; nextIds?: string[] };
   logBaseKey?: string;
   failureInfo?: { message?: string };
+}
+
+// Build (CI) tab shape — parsed client-side from moduleInfo.ci.
+interface BuildInfo {
+  repo: string;
+  branches: { source: string; dest?: string };
+  pr?: number | string;
+  commits: { sha: string; msg: string; author: string; link?: string }[];
+  artifacts: { name: string; type: 'docker' | 'sbom' | 'file'; version: string; registry: string; digest?: string; url?: string; failed?: boolean }[];
+}
+
+// Deploy (CD) tab shape — parsed client-side per CD stage from layoutNodeMap.
+interface DeployStage {
+  stageId: string;
+  stageName: string;
+  status: 'ok' | 'pending' | 'waiting' | 'blocked' | 'failed';
+  blocked?: boolean;
+  skipReason?: string;
+  services: { name: string; identifier?: string; version: string; kind: string; manifests?: string[] }[];
+  envs: { name: string; infraName?: string; type?: string; status: string; deployedAt?: string }[];
 }
 
 interface UnitProgress {
@@ -197,6 +230,22 @@ interface ExecGraph {
   nodeAdjacencyListMap?: Record<string, { children?: string[]; nextIds?: string[] }>;
 }
 
+// STO scan summary — parsed host-side (src/api/stoScan.ts) from the execution
+// graph and delivered via STO_SCAN. Kept in sync with that module's exports.
+interface SevCount { total: number; new: number; }
+interface StoScanner {
+  name: string; stepType: string; total: number; new: number; status: string; consoleUrl?: string;
+}
+interface StoScanSummary {
+  scanId: string;
+  skipped?: boolean;
+  running?: boolean;
+  tools: string[];
+  critical: SevCount; high: SevCount; medium: SevCount; low: SevCount; info: SevCount; exempted: SevCount;
+  scanners: StoScanner[];
+  stoUrl?: string;
+}
+
 interface ExecState {
   logsUnavailable?: boolean;  // set when all log fetches fail (FF not enabled)
   planExecutionId: string;
@@ -224,6 +273,7 @@ interface ExecState {
   externalApproval?: { planExecutionId: string; approvalType: 'Jira' | 'ServiceNow'; ticketId: string; ticketUrl?: string; projectKey?: string; issueType?: string; ticketType?: string; approvalCriteria?: string; rejectionCriteria?: string; stageIdentifier?: string };
   cost?:  { totalCost?: number; currency?: string; branchAvgCost?: number };
   sto?:   { count: number; critical: number; high: number; medium: number };
+  stoScan?: StoScanSummary;
   ti?:    { total: number; failed: number; flaky: number; selected: number };
   ssca?:  { flagged: number };
   cd?:    Array<{ environment: string; status: string }>;
@@ -268,6 +318,7 @@ const TERMINAL_STATUSES_SET = new Set([
 
 const state = {
   initializing:  true, // true until we receive envDetection message
+  configResolved: false, // true once GIT_CONTEXT or AUTH_ERROR has confirmed configured status
   gitCtx:        null as GitCtx | null,
   org:           '' as string,
   project:       '' as string,
@@ -284,6 +335,7 @@ const state = {
 
   // Navigation state
   viewMode:      'pipelines' as ViewMode,
+  activeDetailTab: 'pipeline' as 'pipeline' | 'ci' | 'cd' | 'sec' | 'ti', // active tab within the detail card
 
   // Pipelines tab state
   pipelineList:  [] as PipelineItem[],
@@ -429,6 +481,7 @@ window.addEventListener('message', ({ data: msg }) => {
       state.shaMismatch = null;
       // GIT_CONTEXT means we have config (org/project) - mark as configured
       state.configured = true;
+      state.configResolved = true;
       // Update authSource from settings if provided
       if (msg.authSource) {
         state.authSource = msg.authSource as 'pat' | 'env';
@@ -603,6 +656,7 @@ window.addEventListener('message', ({ data: msg }) => {
         approval: isTerminal ? undefined : prev?.approval,
         externalApproval: isTerminal ? undefined : prev?.externalApproval,
         sto: prev?.sto,   ti: prev?.ti,   ssca: prev?.ssca, cd: prev?.cd,
+        stoScan: prev?.stoScan,
       });
       // A status change (e.g. RUNNING → ABORTED after an abort) must reflect
       // immediately rather than waiting for the throttled auto-render window.
@@ -733,6 +787,14 @@ window.addEventListener('message', ({ data: msg }) => {
       }
       break;
 
+    case 'STO_SCAN': {
+      // Scope to the specific execution so one run's findings can't bleed onto
+      // another cached execution (e.g. while browsing history).
+      const target = state.executions.get((msg as any).planExecutionId);
+      if (target) target.stoScan = (msg as any).stoScan;
+      break;
+    }
+
     case 'TI_SUMMARY':
       for (const [, ex] of state.executions) {
         ex.ti = { total: msg.total, failed: msg.failed, flaky: msg.flaky, selected: msg.selected };
@@ -862,6 +924,7 @@ window.addEventListener('message', ({ data: msg }) => {
         approval: msg.approval ?? prev?.approval,
         externalApproval: msg.externalApproval ?? prev?.externalApproval,
         sto: msg.sto,   ti: msg.ti,   ssca: msg.ssca, cd: msg.cd,
+        stoScan: prev?.stoScan,
       });
       // Force an immediate render when the execution first loads (prev absent)
       // or its status changes (e.g. RUNNING → ABORTED), bypassing render throttle.
@@ -895,6 +958,7 @@ window.addEventListener('message', ({ data: msg }) => {
 
     case 'AUTH_ERROR':
       state.configured = false;
+      state.configResolved = true;
       break;
 
     case 'LOGS_UNAVAILABLE':
@@ -945,6 +1009,7 @@ window.addEventListener('message', ({ data: msg }) => {
       if (msg.configured !== undefined) {
         const wasConfigured = state.configured;
         state.configured = msg.configured;
+        state.configResolved = true;
         console.log('[Webview] Configured state:', { wasConfigured, nowConfigured: state.configured });
 
         // If we just became configured, initialize the view and fetch data
@@ -1026,6 +1091,7 @@ window.addEventListener('message', ({ data: msg }) => {
       });
       // Switch to detail view of the new execution with loading state
       state.viewMode = 'detail';
+      state.activeDetailTab = 'pipeline'; // reset tab for the new execution
       state.detailExecId = (msg as any).newPlanExecutionId;
       state.loadingExecution = true; // Show loading while fetching data
       console.log('[Webview] Switched to detail view:', {
@@ -1494,8 +1560,11 @@ function render(): void {
 }
 
 function build(): string {
-  // Show loading spinner during initialization
-  if (state.initializing) {
+  // Show loading spinner during initialization, AND until the configured status
+  // has been confirmed (GIT_CONTEXT or AUTH_ERROR). envDetection arrives first
+  // and ends `initializing`, but configured/org/project aren't known yet — without
+  // this guard the onboarding screen flashes for one render before the real screen.
+  if (state.initializing || !state.configResolved) {
     return `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;color:var(--fg-2);font-size:11px">
       <span class="spinner" style="font-size:20px">⟳</span>
       <span>Loading...</span>
@@ -2715,6 +2784,288 @@ function adjacentNav(): string {
   </div>`;
 }
 
+// ── Security tab body ──────────────────────────────────────────────────────
+const SHIELD = '<svg width="13" height="13" viewBox="0 0 12 12"><path d="M6 1.5 L10 3 L10 6.2 Q10 9 6 10.5 Q2 9 2 6.2 L2 3 Z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+const EXT_LINK = '<svg width="11" height="11" viewBox="0 0 12 12"><path d="M4.5 2 H10 V7.5 M10 2 L5 7 M3 4 V10 H9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function securityTabBody(ex: ExecState): string {
+  const s = ex.stoScan;
+  if (!s) {
+    return `<div class="tb tb-sec"><div class="sec-skipped">${SHIELD}<div>
+      <div class="sec-skipped-t">No security scan</div>
+      <div class="sec-skipped-d">This pipeline has no security scan configured.</div>
+    </div></div></div>`;
+  }
+
+  if (s.skipped) {
+    return `<div class="tb tb-sec"><div class="sec-skipped">${SHIELD}<div>
+      <div class="sec-skipped-t">Security scan skipped</div>
+      <div class="sec-skipped-d">Earlier stage failed — scan did not run on this execution.</div>
+    </div></div></div>`;
+  }
+
+  const cats: Array<['critical' | 'high' | 'medium' | 'low' | 'info' | 'exempted', string, string]> = [
+    ['critical', 'Critical', 'crit'], ['high', 'High', 'high'], ['medium', 'Medium', 'med'],
+    ['low', 'Low', 'low'], ['info', 'Info', 'info'], ['exempted', 'Exempted', 'exempt'],
+  ];
+
+  let totalFindings = 0, newCount = 0;
+  const tiles = cats.map(([id, label, kind]) => {
+    const v: SevCount = s[id] ?? { total: 0, new: 0 };
+    totalFindings += v.total; newCount += v.new;
+    const newBadge = v.new > 0
+      ? `<span class="sev-new" title="${v.new} new in this scan"><span class="sev-new-arrow">▲</span>${v.new} new</span>` : '';
+    return `<button class="sev sev-${kind} ${v.total === 0 ? 'is-empty' : ''}">
+      <span class="sev-top"><span class="sev-lbl">${esc(label)}</span>${newBadge}</span>
+      <span class="sev-n">${v.total}</span>
+    </button>`;
+  }).join('');
+
+  const tools = s.tools.map(t => `<span class="sec-tool">${esc(t)}</span>`).join('');
+  const live = s.running ? `<span class="sec-scan-live"><span class="sec-scan-live-dot"></span> scanning…</span>` : '';
+  const newTotalRow = newCount > 0
+    ? `<div class="sec-total-row sec-total-row-new"><span class="sec-total-l"><span class="sec-new-ic">▲</span>New in this scan</span><span class="sec-total-n sec-total-n-new">${newCount}</span></div>` : '';
+  const stoBtn = s.stoUrl
+    ? `<a class="sec-sto-btn" data-action="openUrl" data-url="${esc(s.stoUrl)}">${SHIELD}<span class="sec-sto-l">Open in Harness STO</span>${EXT_LINK}</a>`
+    : '';
+
+  return `<div class="tb tb-sec">
+    <div class="sec-scan-bar">
+      <div class="sec-scan-l">${SHIELD}<span class="sec-scan-ttl">Security scan</span>${live}</div>
+      <div class="sec-scan-r">${tools}</div>
+    </div>
+    <div class="sec-grid">${tiles}</div>
+    <div class="sec-total">
+      <div class="sec-total-row"><span class="sec-total-l">Total findings</span><span class="sec-total-n">${totalFindings}</span></div>
+      ${newTotalRow}
+    </div>
+    ${stoBtn}
+    <div class="sec-meta">Scan triggered automatically by this pipeline. Findings include container images, IaC, SCA dependencies, and SAST.</div>
+  </div>`;
+}
+
+// ── Build (CI) tab ─────────────────────────────────────────────────────────
+function parseBuild(ex: ExecState): BuildInfo | null {
+  const ci = (ex.moduleInfo as any)?.ci;
+  if (!ci) return null;
+  const info = ci.ciExecutionInfoDTO ?? {};
+  const isPr = info.event === 'pullRequest';
+  const src = isPr ? info.pullRequest : info.branch;
+  const commits = (src?.commits ?? []).map((c: any) => ({
+    sha: String(c.id ?? '').slice(0, 7),
+    msg: String(c.message ?? '').split('\n')[0],
+    author: c.ownerName || c.ownerEmail || '—',
+    link: c.link,
+  }));
+
+  const ciInfo = ci.unifiedPipelineExecutionModuleInfo?.pipelineCIInfo ?? {};
+  const mapImage = (a: any) => {
+    const parts = String(a.imageName ?? '').split('/');
+    return {
+      name: parts[parts.length - 1] || a.imageName || 'image',
+      type: 'docker' as const,
+      version: a.tag ?? '—',
+      registry: parts.length > 1 ? parts[parts.length - 2] : (a.imageName ?? ''),
+      digest: a.digest ? String(a.digest).slice(0, 14) : undefined,
+      url: a.url,
+    };
+  };
+  let images = (ciInfo.imageArtifacts ?? []).map(mapImage);
+
+  // Fallback: pull published images from per-step stepArtifacts when the
+  // top-level rollup is empty (BuildAndPushDockerRegistry nodes).
+  if (images.length === 0 && ex.executionGraph?.nodeMap) {
+    for (const node of Object.values(ex.executionGraph.nodeMap) as any[]) {
+      const outcomes = node?.outcomes ?? {};
+      for (const oc of Object.values(outcomes) as any[]) {
+        const published = oc?.stepArtifacts?.publishedImageArtifacts;
+        if (Array.isArray(published)) images.push(...published.map(mapImage));
+      }
+    }
+  }
+
+  const sboms = (ciInfo.sbomArtifacts ?? []).map((a: any) => {
+    const parts = String(a.imageName ?? a.name ?? '').split('/');
+    return {
+      name: `${parts[parts.length - 1] || 'artifact'} · SBOM`,
+      type: 'sbom' as const,
+      version: a.tag ?? '—',
+      registry: parts.length > 1 ? parts[parts.length - 2] : '',
+    };
+  });
+
+  // De-dupe images by name+version (stepArtifacts fallback can repeat the rollup).
+  const seen = new Set<string>();
+  images = images.filter(i => {
+    const key = `${i.name}@${i.version}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return {
+    repo: ci.repoName ?? '—',
+    branches: { source: ci.branch ?? info.branch?.name ?? '—', dest: isPr ? info.pullRequest?.targetBranch : undefined },
+    pr: isPr ? (info.pullRequest?.id ?? info.pullRequest?.number) : undefined,
+    commits,
+    artifacts: [...images, ...sboms],
+  };
+}
+
+const GIT_BRANCH_IC = '<svg width="11" height="11" viewBox="0 0 12 12"><path d="M4 2.5 V9.5 M4 4 Q4 6 7 6 Q9 6 9 4" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><circle cx="4" cy="2.2" r="1.1" fill="currentColor"/><circle cx="4" cy="9.8" r="1.1" fill="currentColor"/><circle cx="9" cy="3" r="1.1" fill="currentColor"/></svg>';
+const ARTIFACT_IC = '<svg width="11" height="11" viewBox="0 0 12 12"><path d="M6 1.5 L10 3.5 V8 L6 10.5 L2 8 V3.5 Z M2 3.5 L6 5.5 L10 3.5 M6 5.5 V10.5" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>';
+
+function buildTabBody(ex: ExecState): string {
+  const b = parseBuild(ex);
+  if (!b) {
+    return `<div class="tb tb-build"><div class="sec-skipped">${ARTIFACT_IC}<div>
+      <div class="sec-skipped-t">No build info</div>
+      <div class="sec-skipped-d">This pipeline has no CI build stage.</div>
+    </div></div></div>`;
+  }
+
+  const prPill = b.pr
+    ? `<span class="tb-pr-inline">#${esc(b.pr)}${b.branches.dest ? ` → ${esc(b.branches.dest)}` : ''}</span>`
+    : '';
+
+  const commitRows = b.commits.length
+    ? b.commits.map(c => {
+        const sha = c.link
+          ? `<a class="tb-commit-sha" data-action="openUrl" data-url="${esc(c.link)}">${esc(c.sha)}</a>`
+          : `<span class="tb-commit-sha">${esc(c.sha)}</span>`;
+        return `<div class="tb-commit">${sha}<span class="tb-commit-msg">${esc(c.msg)}</span><span class="tb-commit-author">${esc(c.author)}</span></div>`;
+      }).join('')
+    : `<span class="tb-empty-line">No commits</span>`;
+
+  const artRows = b.artifacts.length
+    ? b.artifacts.map(a => {
+        const sub = [a.registry, a.digest].filter(Boolean).map(x => esc(x as string)).join(' · ');
+        const ver = a.version ? `<span class="tb-art-ver">${esc(a.version)}</span>` : '';
+        const ext = a.url
+          ? `<a class="tb-art-ext" data-action="openUrl" data-url="${esc(a.url)}" aria-label="Open artifact">${EXT_LINK}</a>`
+          : '';
+        return `<div class="tb-art tb-art-${a.type}${a.failed ? ' is-failed' : ''}">
+          <span class="tb-art-ic">${ARTIFACT_IC}</span>
+          <div class="tb-art-main">
+            <div class="tb-art-top"><span class="tb-art-name">${esc(a.name)}</span>${ver}</div>
+            <span class="tb-art-reg">${sub}</span>
+          </div>
+          ${ext}
+        </div>`;
+      }).join('')
+    : `<span class="tb-empty-line">No artifacts published</span>`;
+
+  return `<div class="tb tb-build">
+    <div class="tb-stage">
+      <div class="tb-kv"><span class="tb-k">Repository</span><span class="tb-v tb-v-repo"><svg width="11" height="11" viewBox="0 0 12 12" aria-hidden><path d="M3 1.5 L9 1.5 Q10 1.5 10 2.5 L10 10 L3 10 Q2 10 2 9 Q2 8 3 8 L10 8" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg><span class="mono">${esc(b.repo)}</span></span></div>
+      <div class="tb-kv"><span class="tb-k">Branch</span><span class="tb-v">${GIT_BRANCH_IC}<span class="mono">${esc(b.branches.source)}</span>${prPill}</span></div>
+      <div class="tb-kv tb-kv-stack"><span class="tb-k">Commits${b.commits.length ? ` <span class="tb-k-n">${b.commits.length}</span>` : ''}</span><div class="tb-commits">${commitRows}</div></div>
+      <div class="tb-kv tb-kv-stack"><span class="tb-k">Artifacts${b.artifacts.length ? ` <span class="tb-k-n">${b.artifacts.length}</span>` : ''}</span><div class="tb-arts">${artRows}</div></div>
+    </div>
+  </div>`;
+}
+
+// ── Deploy (CD) tab ────────────────────────────────────────────────────────
+function parseDeploy(ex: ExecState): DeployStage[] {
+  const map = ex.layoutNodeMap ?? {};
+  const S: Record<string, DeployStage['status']> = {
+    SUCCESS: 'ok', NOTSTARTED: 'pending', NOT_STARTED: 'pending',
+    APPROVALWAITING: 'waiting', SKIPPED: 'blocked', FAILED: 'failed',
+  };
+  return Object.values(map)
+    .filter(n => n.module === 'cd' && (n.nodeType === 'Deployment' || !!n.moduleInfo?.cd))
+    .map(n => {
+      const cd = n.moduleInfo?.cd ?? {};
+      const si = cd.serviceInfo, infra = cd.infraExecutionSummary;
+      const rawStatus = String(n.status).toUpperCase();
+      const status = S[rawStatus] ?? 'pending';
+      const blocked = status === 'blocked';
+      const skipReason = (n.nodeRunInfo && n.nodeRunInfo.evaluatedCondition === false)
+        ? 'Skipped — when condition not met' : undefined;
+      return {
+        stageId: n.nodeUuid,
+        stageName: n.name,
+        status, blocked, skipReason,
+        services: si ? [{
+          name: si.displayName ?? si.identifier ?? 'service',
+          identifier: si.identifier,
+          version: si.artifacts?.primary?.tag ?? '—',
+          kind: si.deploymentType ?? 'Deployment',
+          manifests: si.manifestInfo?.paths ?? [],
+        }] : [],
+        envs: infra ? [{
+          name: infra.name ?? infra.identifier ?? 'env',
+          infraName: infra.infrastructureName,
+          type: infra.type,
+          status: rawStatus === 'SUCCESS' ? 'ok' : status,
+          deployedAt: n.endTs ? ago(n.endTs) : undefined,
+        }] : [],
+      };
+    });
+}
+
+const SVC_IC = '<svg width="12" height="12" viewBox="0 0 14 14"><path d="M7 1.5 L12 4 L7 6.5 L2 4 Z M2 4 L2 10 L7 12.5 L12 10 L12 4 M7 6.5 L7 12.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+
+const STAGE_CHIP_LABEL: Record<DeployStage['status'], string> = {
+  ok: 'Deployed', pending: 'Pending', waiting: 'Waiting', blocked: 'Skipped', failed: 'Failed',
+};
+
+function deployTabBody(ex: ExecState): string {
+  const stages = parseDeploy(ex);
+  if (!stages.length) {
+    return `<div class="tb tb-deploy"><div class="sec-skipped">${GIT_BRANCH_IC}<div>
+      <div class="sec-skipped-t">No deploy info</div>
+      <div class="sec-skipped-d">This pipeline has no CD deployment stage.</div>
+    </div></div></div>`;
+  }
+
+  const totalEnv = stages.reduce((t, s) => t + s.envs.length, 0);
+  const deployedEnv = stages.reduce((t, s) => t + s.envs.filter(e => e.status === 'ok').length, 0);
+
+  const cards = stages.map(s => {
+    const chip = `<span class="tb-stage-chip is-${s.status}">${STAGE_CHIP_LABEL[s.status]}</span>`;
+    const skip = s.skipReason ? `<div class="tb-skip">${esc(s.skipReason)}</div>` : '';
+
+    const services = s.services.map(svc => {
+      const manifests = (svc.manifests ?? []).length
+        ? `<div class="tb-manifests">${svc.manifests!.map(m => `<span class="tb-manifest">${esc(m.split('/').pop() || m)}</span>`).join('')}</div>`
+        : '';
+      return `<div class="tb-svc">
+        <div class="tb-svc-row"><span class="tb-svc-ic">${SVC_IC}</span><span class="tb-svc-name">${esc(svc.name)}</span><span class="tb-svc-kind">${esc(svc.kind)}</span><span class="tb-svc-ver mono">${esc(svc.version)}</span></div>
+        ${manifests}
+      </div>`;
+    }).join('');
+
+    const envs = s.envs.map(e => {
+      const meta = [e.type, e.infraName].filter(Boolean).map(x => esc(x as string)).join(' · ');
+      const when = e.deployedAt ? `<span class="tb-env-at">${esc(e.deployedAt)}</span>` : '';
+      return `<div class="tb-env">
+        <span class="tb-env-dot is-${e.status}"></span>
+        <span class="tb-env-name">${esc(e.name)}</span>
+        <span class="tb-env-meta">${meta}</span>${when}
+        <span class="tb-env-ext" aria-label="Open environment">${EXT_LINK}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="tb-cd-stage">
+      <div class="tb-cd-head"><span class="tb-cd-name">${esc(s.stageName)}</span>${chip}</div>
+      ${skip}
+      ${services ? `<div class="tb-svcs">${services}</div>` : ''}
+      ${envs ? `<div class="tb-envs">${envs}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `<div class="tb tb-deploy">
+    <div class="tb-cd-rollup">
+      <span class="tb-cd-rollup-l">Stages</span>
+      <span class="tb-cd-rollup-n">${stages.length}</span>
+      <span class="tb-cd-rollup-sep">·</span>
+      <span class="tb-cd-rollup-l">${deployedEnv}/${totalEnv} envs live</span>
+    </div>
+    ${cards}
+  </div>`;
+}
+
 // ── Execution card ─────────────────────────────────────────────────────────
 function execCard(ex: ExecState): string {
   const isRunning = !ex.isTerminal;
@@ -2957,35 +3308,56 @@ function execCard(ex: ExecState): string {
     const mi = ex.moduleInfo as any;
     const tabs: string[] = [];
 
+    const at = state.activeDetailTab;
+    const tabBtn = (tab: string, label: string, badge = '') =>
+      `<button class="tab${at === tab ? ' on' : ''}" data-action="switchDetailTab" data-tab="${tab}">${label}${badge}</button>`;
+
     // Pipeline tab (always visible, default active)
-    tabs.push(`<button class="tab on">Pipeline</button>`);
+    tabs.push(tabBtn('pipeline', 'Pipeline'));
 
     // Build tab (CI module)
     if (mi?.ci) {
-      tabs.push(`<button class="tab">Build</button>`);
+      tabs.push(tabBtn('ci', 'Build'));
     }
 
     // Deploy tab (CD module)
     if (mi?.cd) {
-      tabs.push(`<button class="tab">Deploy</button>`);
+      tabs.push(tabBtn('cd', 'Deploy'));
     }
 
-    // Security tab (STO module)
-    if (mi?.sto || ex.sto) {
-      const errorCount = ex.sto?.critical || 0;
-      const badge = errorCount > 0 ? `<span class="tab-badge">${errorCount}</span>` : '';
-      tabs.push(`<button class="tab">Security${badge}</button>`);
+    // Security tab (STO module) — badge shows NEW critical+high (design intent)
+    if (mi?.sto || ex.stoScan) {
+      const s = ex.stoScan;
+      const newCritHigh = s ? s.critical.new + s.high.new : 0;
+      const badge = newCritHigh > 0 ? `<span class="tab-badge">${newCritHigh}</span>` : '';
+      tabs.push(tabBtn('sec', 'Security', badge));
     }
 
-    // Tests tab (TI module)
+    // Tests tab (TI module) — visible but not yet interactive (no tab body
+    // implemented). Rendered without data-action so it can't switch to a dead
+    // body; the count badge still surfaces failures.
     if (mi?.ti || ex.ti) {
       const failCount = ex.ti?.failed || 0;
       const badge = failCount > 0 ? `<span class="tab-badge warn">${failCount}</span>` : '';
-      tabs.push(`<button class="tab">Tests${badge}</button>`);
+      tabs.push(`<button class="tab is-disabled" disabled title="Tests detail coming soon">Tests${badge}</button>`);
     }
 
     if (tabs.length > 1) {
       parts.push(`<div class="tabs">${tabs.join('')}</div>`);
+    }
+
+    // Non-pipeline tab bodies — render and skip the pipeline body below.
+    if (at === 'sec') {
+      parts.push(securityTabBody(ex));
+      return parts.join('');
+    }
+    if (at === 'ci') {
+      parts.push(buildTabBody(ex));
+      return parts.join('');
+    }
+    if (at === 'cd') {
+      parts.push(deployTabBody(ex));
+      return parts.join('');
     }
   } else {
     // Simple theme: module badges
@@ -3142,12 +3514,12 @@ function execCard(ex: ExecState): string {
               <span class="step-stat">${stageIcon(step.status)}</span>
               <span class="step-name">${esc(step.name)}</span>
               <span class="step-dur" data-start-ts="${step.startTs || 0}" data-end-ts="${step.endTs || 0}">${dur(step.startTs, step.endTs)}</span>
-              ${canExpand ? `<span class="step-ext">${extIcon}</span>` : ''}
+              ${canExpand ? `<span class="tip-wrap"><span class="step-ext">${extIcon}</span><span class="tip">View step logs</span></span>` : ''}
             </button>`);
           } else {
             // Simple theme
             const showExtIcon = state.logViewerVariation === 'expanded' && canExpand;
-            const extIcon = showExtIcon ? '<span class="step-ext-ic">↗</span>' : '';
+            const extIcon = showExtIcon ? '<span class="tip-wrap"><span class="step-ext-ic">↗</span><span class="tip">View step logs</span></span>' : '';
 
             parts.push(`<div class="step-row${stepActive ? ' step-running' : ''}${stepFailed ? ' failed' : ''}${stepWarning ? ' warning' : ''}${clickable}" data-action="toggleStep"${nodeAttr}${logKeyAttr}${stepNameAttr}${stageNameAttr}${pipelineNameAttr}${planIdAttr}${statusAttr}${durationAttr}>
               <span class="step-toggle${isLoading ? ' step-loading' : ''}">${toggleIcon}</span>
@@ -3468,7 +3840,7 @@ function opaRow(ex: ExecState): string {
     : '';
 
   const url = o.policyUrl ?? ex.harnessUrl;
-  const link = url ? `<a class="opa-link" data-action="openUrl" data-url="${esc(url)}">↗</a>` : '';
+  const link = url ? `<span class="tip-wrap"><a class="opa-link" data-action="openUrl" data-url="${esc(url)}">↗</a><span class="tip">View policy evaluations</span></span>` : '';
 
   return `<div class="opa-row">
     <span class="opa-row-label">Policy Evaluations</span>
@@ -4008,6 +4380,7 @@ function bind(): void {
 
       state.detailExecId = execId;
       state.viewMode = 'detail';
+      state.activeDetailTab = 'pipeline'; // reset tab when switching executions
       state.loadingExecution = true; // Show loading state while fetching
       state.executionError = null; // Clear any previous error
       // Request full execution detail from extension host
@@ -4019,6 +4392,7 @@ function bind(): void {
   // Back to history
   q('[data-action="backToHistory"]', () => {
     state.viewMode = 'executions';
+    state.activeDetailTab = 'pipeline'; // reset tab when leaving detail view
     // Clear the detail execution when going back to history list
     if (state.detailExecId) {
       state.executions.delete(state.detailExecId);
@@ -4155,6 +4529,14 @@ function bind(): void {
       if (!planExecutionId) return;
       el.setAttribute('disabled', 'true');
       vscode.postMessage({ type: 'abortPipeline', planExecutionId });
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="switchDetailTab"]').forEach(el => {
+    el.addEventListener('click', () => {
+      const tab = el.dataset['tab'] as typeof state.activeDetailTab;
+      state.activeDetailTab = tab || 'pipeline';
+      scheduleRender(true);
     });
   });
 
