@@ -318,6 +318,7 @@ const TERMINAL_STATUSES_SET = new Set([
 
 const state = {
   initializing:  true, // true until we receive envDetection message
+  configResolved: false, // true once GIT_CONTEXT or AUTH_ERROR has confirmed configured status
   gitCtx:        null as GitCtx | null,
   org:           '' as string,
   project:       '' as string,
@@ -480,6 +481,7 @@ window.addEventListener('message', ({ data: msg }) => {
       state.shaMismatch = null;
       // GIT_CONTEXT means we have config (org/project) - mark as configured
       state.configured = true;
+      state.configResolved = true;
       // Update authSource from settings if provided
       if (msg.authSource) {
         state.authSource = msg.authSource as 'pat' | 'env';
@@ -956,6 +958,7 @@ window.addEventListener('message', ({ data: msg }) => {
 
     case 'AUTH_ERROR':
       state.configured = false;
+      state.configResolved = true;
       break;
 
     case 'LOGS_UNAVAILABLE':
@@ -1006,6 +1009,7 @@ window.addEventListener('message', ({ data: msg }) => {
       if (msg.configured !== undefined) {
         const wasConfigured = state.configured;
         state.configured = msg.configured;
+        state.configResolved = true;
         console.log('[Webview] Configured state:', { wasConfigured, nowConfigured: state.configured });
 
         // If we just became configured, initialize the view and fetch data
@@ -1556,8 +1560,11 @@ function render(): void {
 }
 
 function build(): string {
-  // Show loading spinner during initialization
-  if (state.initializing) {
+  // Show loading spinner during initialization, AND until the configured status
+  // has been confirmed (GIT_CONTEXT or AUTH_ERROR). envDetection arrives first
+  // and ends `initializing`, but configured/org/project aren't known yet — without
+  // this guard the onboarding screen flashes for one render before the real screen.
+  if (state.initializing || !state.configResolved) {
     return `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;color:var(--fg-2);font-size:11px">
       <span class="spinner" style="font-size:20px">⟳</span>
       <span>Loading...</span>
