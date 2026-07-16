@@ -197,7 +197,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Route webview messages back to VS Code commands
   bridge.onMessage(async (msg: unknown) => {
-    const m = msg as { type: string; command?: string; url?: string; approvalInstanceId?: string; action?: string; comments?: string; page?: number; filter?: string; planExecutionId?: string; pipelineIdentifier?: string; pipelineId?: string; pinnedPipelines?: string[]; interruptType?: string };
+    const m = msg as { type: string; command?: string; url?: string; approvalInstanceId?: string; action?: string; comments?: string; page?: number; filter?: string; planExecutionId?: string; pipelineIdentifier?: string; firstStageId?: string; pageSize?: number; pipelineId?: string };
 
     logger.debug('Extension', 'Bridge received message:', m.type);
 
@@ -212,7 +212,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const action = m.action === 'REJECT' ? 'REJECT' : 'APPROVE';
       try {
         await submitApproval(currentConfig, planExecutionId, action, m.comments);
-        vscode.window.showInformationMessage(`Harness: Approval ${action.toLowerCase()}d successfully.`);
+        const actionPastTense = action === 'REJECT' ? 'rejected' : 'approved';
+        vscode.window.showInformationMessage(`Harness: Approval ${actionPastTense} successfully.`);
         poller?.refresh();
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1205,7 +1206,7 @@ async function fetchExecutionDetail(
     }
 
     // Build Harness URL
-    const harnessUrl = `${config.baseUrl}/ng/account/${config.accountIdentifier}/all/orgs/${config.orgIdentifier}/projects/${config.projectIdentifier}/pipelines/${execution.pipelineIdentifier}/deployments/${planExecutionId}/pipeline`;
+    const harnessUrl = `${config.baseUrl}/ng/account/${config.accountIdentifier}/all/orgs/${config.orgIdentifier}/projects/${config.projectIdentifier}/pipelines/${execution.pipelineIdentifier}/executions/${planExecutionId}/pipeline`;
 
     // Build commit URL from execution data (not local git context)
     const { extractTriggerShas, buildCommitUrl } = await import('./git/gitContext');
