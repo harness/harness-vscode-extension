@@ -8,6 +8,7 @@ out/**
 .gitignore
 .env
 .env.local
+.mcp.json
 .DS_Store
 *.md
 !README.md
