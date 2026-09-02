@@ -21,7 +21,7 @@ import { openLogAsEditorTab } from './logs/logEditorTab';
 import { openAgentChatTab, isAgentLog } from './logs/agentChatTab';
 import { openAidaChatPanel, registerAidaChatPanelSerializer, updateActiveChatContext, updateActiveChatTheme, type IntelligenceChatContext } from './ai/aidaChatPanel';
 import { detectAITools } from './ai/detector';
-import { configureMCP, configureCopilotMCP } from './ai/mcpConfigurer';
+import { configureMCP, configureCopilotMCP, configureKiroMCP } from './ai/mcpConfigurer';
 import { buildPrompt } from './ai/promptBuilder';
 import { launchAI } from './ai/launcher';
 import { logger } from './utils/logger';
@@ -566,9 +566,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           credentialSource,  // Pass auth source so MCP config uses env vars when appropriate
         };
 
-        const result = tool?.id === 'copilot'
-          ? await configureCopilotMCP(configOptions)
-          : await configureMCP(configOptions);
+        const result =
+          tool?.id === 'copilot' ? await configureCopilotMCP(configOptions) :
+          tool?.id === 'kiro' ? await configureKiroMCP(configOptions) :
+          await configureMCP(configOptions);
 
         // Get active tool to send back in confirmation
         const updatedDetection = await detectAITools(getAIToolPreference());
