@@ -481,7 +481,82 @@ async function detectGitHubCopilot(): Promise<DetectedTool | null> {
 }
 
 /**
- * Detect all available AI tools (Claude Code CLI + Extension + Cursor + GitHub Copilot)
+ * Get Kiro MCP config paths (cross-platform)
+ * - Global: ~/.kiro/settings/mcp.json (macOS/Linux) or %APPDATA%\Kiro\settings\mcp.json (Windows)
+ * - Project: .kiro/settings/mcp.json in workspace root
+ */
+function getKiroMcpPaths(): { local: string | null; global: string } {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  const local = workspaceFolder ? path.join(workspaceFolder.uri.fsPath, '.kiro', 'settings', 'mcp.json') : null;
+
+  let global: string;
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    global = path.join(appData, 'Kiro', 'settings', 'mcp.json');
+  } else {
+    // macOS/Linux
+    global = path.join(os.homedir(), '.kiro', 'settings', 'mcp.json');
+  }
+
+  return { local, global };
+}
+
+/**
+ * Check if Harness MCP entry exists in Kiro mcp.json
+ * Kiro uses the standard mcpServers format
+ */
+function hasKiroMcpEntry(kiroMcpPath: string): boolean {
+  if (!fs.existsSync(kiroMcpPath)) {
+    return false;
+  }
+
+  try {
+    const content = fs.readFileSync(kiroMcpPath, 'utf-8');
+    const config = JSON.parse(content);
+    const harnessServer = config?.mcpServers?.harness;
+    if (!harnessServer) {
+      return false;
+    }
+    const hasCommand = typeof harnessServer.command === 'string' && harnessServer.command.length > 0;
+    const hasEnv = harnessServer.env && typeof harnessServer.env === 'object';
+    return hasCommand && hasEnv;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect Kiro IDE
+ * Only detects when running inside Kiro editor
+ */
+async function detectKiro(): Promise<DetectedTool | null> {
+  try {
+    // Check if we're running in Kiro editor
+    const isKiroEditor = vscode.env.appName === 'Kiro';
+
+    if (!isKiroEditor) {
+      return null;
+    }
+
+    // Check MCP configuration (try both local and global)
+    const paths = getKiroMcpPaths();
+    const mcpReady = (paths.local && hasKiroMcpEntry(paths.local)) || hasKiroMcpEntry(paths.global);
+
+    return {
+      id: 'kiro',
+      name: 'Kiro',
+      sub: null,
+      mcpReady,
+      path: path.dirname(paths.global),
+    };
+  } catch (error) {
+    logger.error('Kiro Detection', 'Failed to detect Kiro:', error);
+    return null;
+  }
+}
+
+/**
+ * Detect all available AI tools (Claude Code CLI + Extension + Cursor + GitHub Copilot + Kiro)
  * Returns preferred tool as activeTool, or first available if no preference
  */
 export async function detectAITools(preferredToolId?: string): Promise<DetectionResult> {
@@ -509,6 +584,12 @@ export async function detectAITools(preferredToolId?: string): Promise<Detection
   const copilot = await detectGitHubCopilot();
   if (copilot) {
     tools.push(copilot);
+  }
+
+  // Detect Kiro
+  const kiro = await detectKiro();
+  if (kiro) {
+    tools.push(kiro);
   }
 
   // Use preferred tool if specified and available, otherwise default to first

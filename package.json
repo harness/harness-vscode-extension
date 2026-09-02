@@ -108,6 +108,10 @@
         "title": "Harness: Debug FME Flags"
       },
       {
+        "command": "harness.kiroResearch",
+        "title": "Harness: Kiro Detection Research (TEMP)"
+      },
+      {
         "command": "harness.openIntelligenceChat",
         "title": "Harness: Open AI Chat",
         "icon": {

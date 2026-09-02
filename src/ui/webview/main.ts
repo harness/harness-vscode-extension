@@ -1786,6 +1786,7 @@ const AI_TOOL_META: Record<string, { name: string; sub: string | null }> = {
   'claudecode-ext': { name: 'Claude Code', sub: 'Extension' },
   'cursor': { name: 'Cursor', sub: null },
   'copilot': { name: 'GitHub Copilot', sub: null },
+  'kiro': { name: 'Kiro', sub: null },
 };
 
 // Tool glyphs
@@ -1815,11 +1816,20 @@ function copilotGlyph(): string {
   </svg>`;
 }
 
+function kiroGlyph(): string {
+  // Kiro AI logo - simple "K" letter in circle
+  return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5" fill="none"/>
+    <path d="M9 7 L9 17 M9 12 L15 7 M9 12 L15 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
 function getAIToolGlyph(toolId: string): string {
   if (toolId === 'claudecode-cli') return claudeCliGlyph();
   if (toolId === 'claudecode-ext') return claudeExtGlyph();
   if (toolId === 'cursor') return cursorGlyph();
   if (toolId === 'copilot') return copilotGlyph();
+  if (toolId === 'kiro') return kiroGlyph();
   return '';
 }
 
