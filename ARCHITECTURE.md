@@ -363,7 +363,7 @@ harness.pat                        → Personal Access Token (encrypted)
 | **Language** | TypeScript |
 | **IDE Integration** | VS Code Extension API |
 | **UI Framework** | React (in webview) |
-| **HTTP Client** | Node.js built-in (fetch) |
+| **HTTP Client** | Node.js built-in (fetch), with an optional proxy/CA dispatcher (`src/utils/proxy.ts`) |
 | **State Management** | VS Code context/globalState |
 | **Feature Flags** | Split.io (FME SDK) |
 | **Build Tool** | esbuild |

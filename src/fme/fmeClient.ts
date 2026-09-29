@@ -1,7 +1,24 @@
 import * as vscode from 'vscode';
+import type * as http from 'node:http';
+import type * as net from 'node:net';
 import { SplitFactory } from '@splitsoftware/splitio';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { HarnessConfig } from '../config/configManager';
 import { logger } from '../utils/logger';
+import { resolveProxyUrl, redactProxyUrl, resolveTrustedCaCertificates } from '../utils/proxy';
+
+type AgentConnectOpts = Parameters<HttpsProxyAgent<string>['connect']>[1];
+
+/** Applies the trusted CA set to both the proxy connection and the tunneled TLS connection. */
+class TrustedHttpsProxyAgent extends HttpsProxyAgent<string> {
+  constructor(proxyUrl: string, private readonly ca: string[]) {
+    super(proxyUrl, { ca });
+  }
+
+  override connect(req: http.ClientRequest, opts: AgentConnectOpts): Promise<net.Socket> {
+    return super.connect(req, { ...opts, ca: this.ca } as AgentConnectOpts);
+  }
+}
 
 // Default FME SDK key shipped with extension (for all end users)
 // This is a client-side SDK key - safe to embed in client apps
@@ -190,6 +207,22 @@ export async function initFmeClient(
     const logLevel = vscode.workspace.getConfiguration('harness').get<string>('logLevel', 'info');
     const enableSdkDebug = logLevel === 'debug';
 
+    // Split's Node SDK uses node-fetch, which doesn't read HTTPS_PROXY/HTTP_PROXY itself —
+    // route it through the same proxy as everything else via a custom agent.
+    const proxyUrl = resolveProxyUrl();
+    if (proxyUrl) {
+      logger.info('FME', `Routing Split.io SDK traffic through proxy: ${redactProxyUrl(proxyUrl)}`);
+    }
+    const proxyAgent = proxyUrl
+      ? new TrustedHttpsProxyAgent(proxyUrl, resolveTrustedCaCertificates())
+      : undefined;
+
+    // Typed separately (vs. inline) so the conditional spread doesn't upset SplitFactory's overload resolution.
+    const syncSettings: SplitIO.INodeSettings['sync'] = {
+      impressionsMode: 'OPTIMIZED', // Reduce spam
+      ...(proxyAgent ? { requestOptions: { agent: proxyAgent } } : {}),
+    };
+
     // Initialize Split.io factory (FME uses Split.io as engine)
     const factory = SplitFactory({
       core: {
@@ -203,9 +236,7 @@ export async function initFmeClient(
         featuresRefreshRate: 60, // Poll every 60 seconds
         impressionsRefreshRate: 60, // Send impressions every 60 seconds
       },
-      sync: {
-        impressionsMode: 'OPTIMIZED', // Reduce spam
-      },
+      sync: syncSettings,
       debug: enableSdkDebug, // Enable debug logs when logLevel is 'debug'
     });
 

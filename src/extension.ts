@@ -25,6 +25,7 @@ import { configureMCP, configureCopilotMCP } from './ai/mcpConfigurer';
 import { buildPrompt } from './ai/promptBuilder';
 import { launchAI } from './ai/launcher';
 import { logger } from './utils/logger';
+import { configureProxy, registerProxyConfigWatcher } from './utils/proxy';
 
 // Global state key for AI tool preference
 const AI_TOOL_PREFERENCE_KEY = 'harness.aiToolPreference';
@@ -40,6 +41,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Initialize logger with OutputChannel
   logger.initialize(outputChannel);
+
+  // Wire proxy support before anything makes a network call.
+  configureProxy();
+  registerProxyConfigWatcher(context);
 
   context.subscriptions.push(diagnostics, statusBar, outputChannel);
 

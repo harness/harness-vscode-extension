@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Proxy support**: All extension traffic (Harness API and FME feature flags) honors the new `harness.proxy` setting, falling back to `HTTPS_PROXY`/`HTTP_PROXY` (`NO_PROXY` applies to Harness API traffic when the proxy comes from the environment) ([#20](https://github.com/harness/harness-vscode-extension/issues/20))
+- **Custom CA certificates**: New `harness.caBundle` setting, plus automatic trust of the OS certificate store where supported, for private or TLS-inspecting proxies
+
 ## [0.1.9] - 2026-08-03
 
 ### Added
