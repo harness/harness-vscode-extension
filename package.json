@@ -161,112 +161,123 @@
         "path": "./syntaxes/log.tmLanguage.json"
       }
     ],
-    "configuration": {
-      "title": "Harness",
-      "properties": {
-        "harness.baseUrl": {
-          "type": "string",
-          "default": "https://app.harness.io",
-          "description": "Harness instance URL. Change for on-prem deployments."
-        },
-        "harness.proxy": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "markdownDescription": "HTTP(S) proxy URL for all extension network requests (e.g. `http://proxy.example.com:8080`); must start with `http://` or `https://`. Leave empty to use the standard `https_proxy`/`HTTPS_PROXY`/`http_proxy`/`HTTP_PROXY` environment variables; `NO_PROXY` is honored only for environment-variable proxies and not for feature-flag traffic. VS Code's own `http.proxy`/`http.proxySupport` settings also apply and may take precedence on recent VS Code versions. Feature-flag traffic picks up changes after **Developer: Reload Window**; environment variable changes require restarting VS Code. Settings are stored in plain text — prefer environment variables if your proxy requires credentials."
-        },
-        "harness.caBundle": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "markdownDescription": "Absolute path to a PEM CA bundle for private or TLS-inspecting proxy certificate authorities. Node.js and OS root certificates are trusted automatically."
-        },
-        "harness.accountIdentifier": {
-          "type": "string",
-          "default": "",
-          "description": "Harness account ID (Account Settings → Overview)."
-        },
-        "harness.authSource": {
-          "type": "string",
-          "enum": [
-            "pat",
-            "env"
-          ],
-          "enumDescriptions": [
-            "Personal Access Token stored in secret storage",
-            "Environment variables (HARNESS_API_KEY, HARNESS_BASE_URL, HARNESS_ACCOUNT_ID)"
-          ],
-          "default": "pat",
-          "description": "Authentication method. Set automatically during onboarding."
-        },
-        "harness.orgIdentifier": {
-          "type": "string",
-          "default": "default",
-          "description": "Default Harness organization identifier."
-        },
-        "harness.projectIdentifier": {
-          "type": "string",
-          "default": "",
-          "description": "Default Harness project identifier."
-        },
-        "harness.pollingIntervalSeconds": {
-          "type": "number",
-          "default": 10,
-          "minimum": 5,
-          "maximum": 120,
-          "description": "Poll interval in seconds during active pipeline runs."
-        },
-        "harness.diffAwareSTO": {
-          "type": "boolean",
-          "default": true,
-          "description": "Limit STO annotations to files changed in the current diff only."
-        },
-        "harness.defaultView": {
-          "type": "string",
-          "enum": [
-            "thisCommit",
-            "allExecutions"
-          ],
-          "enumDescriptions": [
-            "Show the pipeline for your current HEAD commit (default)",
-            "Show the full project execution history list"
-          ],
-          "default": "thisCommit",
-          "description": "Which view opens by default when the Harness panel loads."
-        },
-        "harness.fmeSdkKey": {
-          "type": "string",
-          "default": "",
-          "description": "Harness FME (Feature Management & Experimentation) SDK key. Get it from: FME → Admin → SDK Keys → Client-side"
-        },
-        "harness.logLevel": {
-          "type": "string",
-          "enum": [
-            "off",
-            "error",
-            "warn",
-            "info",
-            "debug"
-          ],
-          "enumDescriptions": [
-            "No logs (production mode)",
-            "Errors only",
-            "Errors and warnings",
-            "Errors, warnings, and info messages (recommended)",
-            "All logs including debug traces (development mode)"
-          ],
-          "default": "info",
-          "description": "Controls console output verbosity. Use 'debug' for troubleshooting, 'info' for normal operation, 'error' for production."
-        },
-        "harness.claudeCliTimeoutSeconds": {
-          "type": "number",
-          "default": 90,
-          "minimum": 30,
-          "maximum": 600,
-          "description": "Timeout for Claude Code CLI commands in seconds. Increase for complex queries requiring many API calls."
+    "configuration": [
+      {
+        "title": "Harness",
+        "order": 1,
+        "properties": {
+          "harness.baseUrl": {
+            "type": "string",
+            "default": "https://app.harness.io",
+            "description": "Harness instance URL. Change for on-prem deployments."
+          },
+          "harness.accountIdentifier": {
+            "type": "string",
+            "default": "",
+            "description": "Harness account ID (Account Settings → Overview)."
+          },
+          "harness.authSource": {
+            "type": "string",
+            "enum": [
+              "pat",
+              "env"
+            ],
+            "enumDescriptions": [
+              "Personal Access Token stored in secret storage",
+              "Environment variables (HARNESS_API_KEY, HARNESS_BASE_URL, HARNESS_ACCOUNT_ID)"
+            ],
+            "default": "pat",
+            "description": "Authentication method. Set automatically during onboarding."
+          },
+          "harness.orgIdentifier": {
+            "type": "string",
+            "default": "default",
+            "description": "Default Harness organization identifier."
+          },
+          "harness.projectIdentifier": {
+            "type": "string",
+            "default": "",
+            "description": "Default Harness project identifier."
+          },
+          "harness.pollingIntervalSeconds": {
+            "type": "number",
+            "default": 10,
+            "minimum": 5,
+            "maximum": 120,
+            "description": "Poll interval in seconds during active pipeline runs."
+          },
+          "harness.diffAwareSTO": {
+            "type": "boolean",
+            "default": true,
+            "description": "Limit STO annotations to files changed in the current diff only."
+          },
+          "harness.defaultView": {
+            "type": "string",
+            "enum": [
+              "thisCommit",
+              "allExecutions"
+            ],
+            "enumDescriptions": [
+              "Show the pipeline for your current HEAD commit (default)",
+              "Show the full project execution history list"
+            ],
+            "default": "thisCommit",
+            "description": "Which view opens by default when the Harness panel loads."
+          },
+          "harness.fmeSdkKey": {
+            "type": "string",
+            "default": "",
+            "description": "Harness FME (Feature Management & Experimentation) SDK key. Get it from: FME → Admin → SDK Keys → Client-side"
+          },
+          "harness.logLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "error",
+              "warn",
+              "info",
+              "debug"
+            ],
+            "enumDescriptions": [
+              "No logs (production mode)",
+              "Errors only",
+              "Errors and warnings",
+              "Errors, warnings, and info messages (recommended)",
+              "All logs including debug traces (development mode)"
+            ],
+            "default": "info",
+            "description": "Controls console output verbosity. Use 'debug' for troubleshooting, 'info' for normal operation, 'error' for production."
+          },
+          "harness.claudeCliTimeoutSeconds": {
+            "type": "number",
+            "default": 90,
+            "minimum": 30,
+            "maximum": 600,
+            "description": "Timeout for Claude Code CLI commands in seconds. Increase for complex queries requiring many API calls."
+          }
+        }
+      },
+      {
+        "title": "Proxy Settings",
+        "order": 2,
+        "properties": {
+          "harness.proxy": {
+            "type": "string",
+            "default": "",
+            "order": 1,
+            "scope": "machine",
+            "markdownDescription": "HTTP(S) proxy URL used for all extension network requests, for example `http://proxy.example.com:8080`. It must start with `http://` or `https://`.\n\nLeave empty to use the standard `https_proxy`, `HTTPS_PROXY`, `http_proxy` or `HTTP_PROXY` environment variables.\n\n**Good to know**\n\n- `NO_PROXY` is honored only for environment-variable proxies, not for feature-flag traffic.\n- VS Code's own `http.proxy` and `http.proxySupport` settings also apply and may take precedence on recent VS Code versions.\n- Feature-flag traffic picks up changes after **Developer: Reload Window**. Environment variable changes require restarting VS Code.\n- This value is stored in plain text. If your proxy requires credentials, use environment variables instead."
+          },
+          "harness.caBundle": {
+            "type": "string",
+            "default": "",
+            "order": 2,
+            "scope": "machine",
+            "markdownDescription": "Absolute path to a PEM file with extra certificate authorities, for private or TLS-inspecting proxies. For example `/etc/ssl/certs/corp-ca.pem`.\n\nThe certificates in this file are added to the Node.js and operating system root certificates, which are always trusted. Feature-flag traffic picks up changes after **Developer: Reload Window**."
+          }
         }
       }
-    },
+    ],
     "walkthroughs": [
       {
         "id": "harness.gettingStarted",
