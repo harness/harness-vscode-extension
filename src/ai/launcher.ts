@@ -356,16 +356,30 @@ async function launchKiro(prompt: string): Promise<LaunchResult> {
 
     const allCommands = await vscode.commands.getCommands(true);
 
-    // Copy prompt to clipboard
+    // Kiro's chat is its own panel, not VS Code's built-in chat. kiroAgent.focusChatInput
+    // (the Cmd+L command) starts a new session, waits for it to render, and fills the input,
+    // so it works on every Send without relying on clipboard paste or focus timing.
+    if (allCommands.includes('kiroAgent.focusChatInput')) {
+      await vscode.commands.executeCommand('kiroAgent.focusChatInput', {
+        prompt,
+        newSession: true,
+        clear: true,
+      });
+      logger.debug('AI Launcher', '✓ Opened a new Kiro chat session with the prompt');
+      return {
+        type: 'launched',
+        content: 'Prompt placed in a new Kiro AI Chat session.',
+      };
+    }
+
+    // Older Kiro builds: open the chat and paste from the clipboard.
     await vscode.env.clipboard.writeText(prompt);
     logger.debug('AI Launcher', '✓ Prompt copied to clipboard');
 
-    // Try opening Kiro AI Chat
-    // Kiro uses standard workbench.action.chat commands
     const commandsToTry = [
-      'workbench.action.chat.open',  // Standard VS Code chat open
-      'workbench.action.chat.new',   // Start new chat
-      'kiro.openChat',               // Kiro-specific (if exists)
+      'workbench.action.chat.open',
+      'workbench.action.chat.new',
+      'kiro.openChat',
     ];
 
     let opened = false;
