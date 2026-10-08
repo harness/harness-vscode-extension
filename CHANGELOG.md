@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-10-08
+
 ### Added
 - **Kiro integration**: Detects when the extension runs inside Kiro IDE and offers it as an AI tool alongside Claude Code, Cursor, and Copilot. **Configure MCP** writes the Harness MCP server to `~/.kiro/settings/mcp.json` (or `%APPDATA%\Kiro\settings\mcp.json` on Windows), or `.kiro/settings/mcp.json` for project scope, and Send opens Kiro's AI chat with the prompt pasted in
 - **Proxy support**: All extension traffic (Harness API and FME feature flags) honors the new `harness.proxy` setting, falling back to `HTTPS_PROXY`/`HTTP_PROXY` (`NO_PROXY` applies to Harness API traffic when the proxy comes from the environment) ([#20](https://github.com/harness/harness-vscode-extension/issues/20))
