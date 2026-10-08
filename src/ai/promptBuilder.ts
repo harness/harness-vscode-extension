@@ -1,5 +1,18 @@
 // Prompt builder for AI tools - constructs contextual prompts with pipeline execution data
 
+/** Same shape as the execution links the rest of the extension opens. Works for CI and CD. */
+export function buildExecutionUrl(context: {
+  baseUrl: string;
+  accountId: string;
+  org: string;
+  project: string;
+  pipelineIdentifier: string;
+  planExecutionId: string;
+}): string {
+  const { baseUrl, accountId, org, project, pipelineIdentifier, planExecutionId } = context;
+  return `${baseUrl}/ng/account/${accountId}/all/orgs/${org}/projects/${project}/pipelines/${pipelineIdentifier}/deployments/${planExecutionId}/pipeline`;
+}
+
 interface ExecutionContext {
   pipelineIdentifier?: string;
   planExecutionId?: string;
@@ -23,7 +36,14 @@ export function buildPrompt(userQuestion: string, context?: ExecutionContext): s
 
   // Build Harness URL if we have all required info
   if (context.baseUrl && context.accountId && context.org && context.project && context.pipelineIdentifier && context.planExecutionId) {
-    const executionUrl = `${context.baseUrl}/ng/account/${context.accountId}/module/ci/orgs/${context.org}/projects/${context.project}/pipelines/${context.pipelineIdentifier}/executions/${context.planExecutionId}/pipeline`;
+    const executionUrl = buildExecutionUrl({
+      baseUrl: context.baseUrl,
+      accountId: context.accountId,
+      org: context.org,
+      project: context.project,
+      pipelineIdentifier: context.pipelineIdentifier,
+      planExecutionId: context.planExecutionId,
+    });
 
     // Start with the FIRST action - calling harness_get immediately
     parts.push(`Call harness_get with this Harness execution URL to get the full execution details:\n${executionUrl}`);
@@ -76,7 +96,14 @@ export function buildClaudeTerminalPrompt(userQuestion: string, context?: Execut
 
   let body: string;
   if (context?.baseUrl && context.accountId && context.org && context.project && context.pipelineIdentifier && context.planExecutionId) {
-    const executionUrl = `${context.baseUrl}/ng/account/${context.accountId}/module/ci/orgs/${context.org}/projects/${context.project}/pipelines/${context.pipelineIdentifier}/executions/${context.planExecutionId}/pipeline`;
+    const executionUrl = buildExecutionUrl({
+      baseUrl: context.baseUrl,
+      accountId: context.accountId,
+      org: context.org,
+      project: context.project,
+      pipelineIdentifier: context.pipelineIdentifier,
+      planExecutionId: context.planExecutionId,
+    });
     body = [
       TERMINAL_SURFACE,
       '',
