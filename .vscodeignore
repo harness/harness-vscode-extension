@@ -9,6 +9,8 @@ out/**
 .env
 .env.local
 .mcp.json
+.claude/**
+docs/**
 .DS_Store
 *.md
 !README.md

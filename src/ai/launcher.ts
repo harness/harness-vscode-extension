@@ -1,10 +1,8 @@
-// AI tool launcher - spawns Claude Code CLI or opens Extension
+// AI tool launcher - opens Claude Code in the terminal, or an editor AI panel
 
-import { spawn } from 'child_process';
 import * as vscode from 'vscode';
-import * as os from 'os';
 import { logger } from '../utils/logger';
-import type { HarnessConfig } from '../config/configManager';
+import { launchClaudeInTerminal } from './claudeTerminalLauncher';
 
 export interface LaunchResult {
   type: 'response' | 'launched' | 'error';
@@ -16,10 +14,8 @@ export interface LaunchResult {
 
 interface LaunchOptions {
   prompt: string;
-  toolId: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot';
-  config?: HarnessConfig; // Required for CLI timeout setting
-  cwd?: string; // working directory for CLI execution
-  mcpConfigPath?: string;   // NEW — explicit MCP file to load
+  toolId: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot' | 'kiro';
+  cwd?: string; // working directory for the Claude terminal
 }
 
 /**
@@ -27,123 +23,21 @@ interface LaunchOptions {
  */
 export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
   if (options.toolId === 'claudecode-cli') {
-    // Get timeout from config (in seconds), convert to milliseconds
-    const timeoutMs = options.config ? options.config.claudeCliTimeoutSeconds * 1000 : 90000;
-    return launchCLI(options.prompt, timeoutMs, options.cwd, options.mcpConfigPath);
+    return launchClaudeInTerminal(options.prompt, options.cwd);
   } else if (options.toolId === 'claudecode-ext') {
     return launchExtension(options.prompt);
   } else if (options.toolId === 'cursor') {
     return launchCursor(options.prompt);
   } else if (options.toolId === 'copilot') {
     return launchCopilot(options.prompt);
+  } else if (options.toolId === 'kiro') {
+    return launchKiro(options.prompt);
   } else {
     return {
       type: 'error',
       error: `Unknown tool: ${options.toolId}`,
     };
   }
-}
-
-/**
- * Launch Claude Code CLI subprocess
- * Runs: claude "<prompt>" --output-format json
- */
-async function launchCLI(prompt: string, timeout: number, cwd?: string, mcpConfigPath?: string): Promise<LaunchResult> {
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    let output = '';
-    let errorOutput = '';
-
-    // Spawn claude CLI process
-    // Use --bare mode to skip all automatic context loading (hooks, LSP, CLAUDE.md, local files)
-    // Use --permission-mode bypassPermissions so MCP servers don't require interactive approval
-    // Explicitly load MCP config (project or global scope)
-    // Run from a temp directory to avoid any directory-based context
-    const runDir = os.tmpdir();
-    const claudeConfigPath = mcpConfigPath ?? `${os.homedir()}/.claude.json`;
-    const proc = spawn('claude', [
-      prompt,
-      '--output-format', 'json',
-      '--permission-mode', 'bypassPermissions',
-      '--bare',  // Skip hooks, LSP, plugin sync, auto-memory, CLAUDE.md discovery
-      '--mcp-config', claudeConfigPath,  // Explicitly load MCP servers from specified path
-    ], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout,
-      cwd: runDir,
-      env: {
-        ...process.env,
-        CLAUDE_CODE_SIMPLE: '1',  // Reinforces bare mode
-      },
-    });
-
-    // Collect stdout
-    proc.stdout?.on('data', (data: Buffer) => {
-      output += data.toString();
-    });
-
-    // Collect stderr
-    proc.stderr?.on('data', (data: Buffer) => {
-      errorOutput += data.toString();
-    });
-
-    // Handle timeout
-    const timeoutId = setTimeout(() => {
-      proc.kill('SIGTERM');
-      resolve({
-        type: 'error',
-        error: `Request timed out after ${timeout / 1000} seconds`,
-      });
-    }, timeout);
-
-    // Handle process completion
-    proc.on('close', (code) => {
-      clearTimeout(timeoutId);
-      const durationMs = Date.now() - startTime;
-
-      if (code !== 0) {
-        resolve({
-          type: 'error',
-          error: errorOutput || `Process exited with code ${code}`,
-          durationMs,
-        });
-        return;
-      }
-
-      // Parse JSON output
-      try {
-        const result = JSON.parse(output);
-
-        // Extract response content from Claude CLI JSON format
-        // Claude CLI returns: { type: "result", result: "actual content here", ... }
-        const content = result.result || result.content || result.message || output;
-        const toolCalls = extractToolCalls(result);
-
-        resolve({
-          type: 'response',
-          content: typeof content === 'string' ? content : JSON.stringify(content, null, 2),
-          toolCalls,
-          durationMs,
-        });
-      } catch (error) {
-        // Fallback to raw output if JSON parsing fails
-        resolve({
-          type: 'response',
-          content: output || 'No response received',
-          durationMs,
-        });
-      }
-    });
-
-    // Handle process errors
-    proc.on('error', (error) => {
-      clearTimeout(timeoutId);
-      resolve({
-        type: 'error',
-        error: `Failed to launch Claude CLI: ${error.message}`,
-      });
-    });
-  });
 }
 
 /**
@@ -278,54 +172,6 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
       error: error instanceof Error ? error.message : 'Failed to launch extension',
     };
   }
-}
-
-/**
- * Extract tool calls from Claude CLI JSON response
- * CLI returns structure like: { content: "...", tool_use: [...] }
- */
-function extractToolCalls(result: unknown): Array<{ name: string; args?: unknown }> | undefined {
-  if (!result || typeof result !== 'object') {
-    return undefined;
-  }
-
-  const obj = result as Record<string, unknown>;
-
-  // Check for tool_use array
-  if (Array.isArray(obj.tool_use)) {
-    return obj.tool_use.map((tool: unknown) => {
-      if (tool && typeof tool === 'object') {
-        const t = tool as Record<string, unknown>;
-        return {
-          name: typeof t.name === 'string' ? t.name : 'unknown',
-          args: t.input,
-        };
-      }
-      return { name: 'unknown' };
-    });
-  }
-
-  // Check for content blocks with tool_use type
-  if (Array.isArray(obj.content)) {
-    const toolUseBlocks = obj.content.filter(
-      (block: unknown) =>
-        block &&
-        typeof block === 'object' &&
-        (block as Record<string, unknown>).type === 'tool_use'
-    );
-
-    if (toolUseBlocks.length > 0) {
-      return toolUseBlocks.map((block: unknown) => {
-        const b = block as Record<string, unknown>;
-        return {
-          name: typeof b.name === 'string' ? b.name : 'unknown',
-          args: b.input,
-        };
-      });
-    }
-  }
-
-  return undefined;
 }
 
 /**
@@ -495,6 +341,104 @@ async function launchCopilot(prompt: string): Promise<LaunchResult> {
     return {
       type: 'error',
       error: error instanceof Error ? error.message : 'Failed to launch GitHub Copilot',
+    };
+  }
+}
+
+/**
+ * Launch Kiro AI Chat with prompt
+ * Opens Kiro AI Chat and auto-pastes the prompt
+ */
+async function launchKiro(prompt: string): Promise<LaunchResult> {
+  try {
+    logger.debug('AI Launcher', 'Starting Kiro integration');
+    logger.debug('AI Launcher', 'Prompt length:', prompt.length);
+
+    const allCommands = await vscode.commands.getCommands(true);
+
+    // Kiro's chat is its own panel, not VS Code's built-in chat. kiroAgent.focusChatInput
+    // (the Cmd+L command) starts a new session, waits for it to render, and fills the input,
+    // so it works on every Send without relying on clipboard paste or focus timing.
+    if (allCommands.includes('kiroAgent.focusChatInput')) {
+      await vscode.commands.executeCommand('kiroAgent.focusChatInput', {
+        prompt,
+        newSession: true,
+        clear: true,
+      });
+      logger.debug('AI Launcher', '✓ Opened a new Kiro chat session with the prompt');
+      return {
+        type: 'launched',
+        content: 'Prompt placed in a new Kiro AI Chat session.',
+      };
+    }
+
+    // Older Kiro builds: open the chat and paste from the clipboard.
+    await vscode.env.clipboard.writeText(prompt);
+    logger.debug('AI Launcher', '✓ Prompt copied to clipboard');
+
+    const commandsToTry = [
+      'workbench.action.chat.open',
+      'workbench.action.chat.new',
+      'kiro.openChat',
+    ];
+
+    let opened = false;
+    for (const cmd of commandsToTry) {
+      if (allCommands.includes(cmd)) {
+        try {
+          logger.debug('AI Launcher', `⏳ Trying command: ${cmd}`);
+          await vscode.commands.executeCommand(cmd);
+          logger.debug('AI Launcher', `✓ Opened with: ${cmd}`);
+          opened = true;
+          break;
+        } catch (err) {
+          logger.debug('AI Launcher', `⚠ ${cmd} failed`);
+        }
+      }
+    }
+
+    if (!opened) {
+      logger.debug('AI Launcher', '✗ Could not open Kiro AI Chat with any command');
+      vscode.window.showWarningMessage('Could not open Kiro AI Chat. Please open it manually and try again.');
+      return {
+        type: 'error',
+        error: 'Failed to open Kiro AI Chat',
+      };
+    }
+
+    // Give UI time to render and focus
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // Auto-paste without user interaction
+    logger.debug('AI Launcher', 'Auto-pasting prompt...');
+    try {
+      await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
+      logger.debug('AI Launcher', '✓ Auto-paste successful');
+
+      // Show brief success notification
+      vscode.window.showInformationMessage(
+        'Prompt pasted into Kiro AI Chat',
+        { modal: false }
+      );
+    } catch (err) {
+      logger.debug('AI Launcher', '⚠ Auto-paste failed, showing fallback notification');
+      // Fallback: show notification if auto-paste fails
+      vscode.window.showInformationMessage(
+        'Prompt copied to clipboard - paste it in Kiro AI Chat (Cmd+V)',
+        'OK'
+      );
+    }
+
+    logger.debug('AI Launcher', '✓ Kiro launch complete');
+    return {
+      type: 'launched',
+      content: 'Prompt auto-pasted to Kiro AI Chat.',
+    };
+  } catch (error) {
+    logger.error('AI Launcher', '✗ Kiro launch failed:', error);
+    return {
+      type: 'error',
+      error: error instanceof Error ? error.message : 'Failed to launch Kiro',
     };
   }
 }

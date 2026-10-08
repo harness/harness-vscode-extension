@@ -158,7 +158,7 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 
 **Claude Code** (CLI or Extension)
 - Install from [claude.ai/code](https://claude.ai/code)
-- **CLI mode**: Fully automated — responses appear directly in Harness sidebar
+- **CLI mode**: Opens Claude Code in the integrated terminal with a structured prompt, so you can continue the conversation there
 - **Extension mode**: Semi-automated — auto-opens Claude Code panel with prompt ready
 - Uses local MCP server configuration (`~/.claude.json`)
 
@@ -209,7 +209,8 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 **External AI tools:**
 - Click the **⌄** chevron next to **Ask Harness AI** to switch to Claude Code, Copilot, or Cursor
 - Or type your question in the AI footer when an external tool is selected
-- Tool preference persists across VS Code sessions
+- Destination and preferred external tool persist across VS Code sessions
+- Claude Code CLI opens an interactive integrated terminal; editor-based tools open their existing chat surface
 - Pipeline context automatically included in every query
 
 **What context gets sent:**
@@ -255,9 +256,19 @@ Your Personal Access Token is stored securely in VS Code's secret storage.
 ### Optional Settings
 
 - `harness.pollingIntervalSeconds` — How often to check for updates (default: 10s, min: 5s, max: 120s)
+- `harness.proxy` — HTTP(S) proxy URL (`http://` or `https://`); falls back to the `HTTPS_PROXY`/`HTTP_PROXY` environment variables (user settings only). `NO_PROXY` is honored only when the proxy comes from environment variables, and not for feature-flag traffic. VS Code's own `http.proxy`/`http.proxySupport` settings also apply and may take precedence on recent VS Code versions. Feature-flag traffic picks up proxy changes after **Developer: Reload Window**; environment variable changes require restarting VS Code.
+- `harness.caBundle` — PEM CA bundle path for private or TLS-inspecting proxy certificate authorities (user settings only)
+
+> **Proxy scope:** Proxy and CA configuration installs a process-wide Node.js network dispatcher. It can therefore affect `fetch` requests made by other extensions sharing the same extension host, not only Harness requests.
+
 - `harness.defaultView` — Which view opens by default (`pipelines` or `executions`)
 - `harness.diffAwareSTO` — Limit STO annotations to files changed in current diff (default: true)
 - `harness.logLevel` — Console verbosity: `off`, `error`, `warn`, `info` (default), `debug`
+
+### AI Tools
+
+- `harness.ai.preferredExternalTool` — External tool used when the destination is External (`auto`, Claude Code CLI, Claude Code extension, Cursor, Copilot, or Kiro). Harness AI is chosen with `harness.ai.defaultDestination`. The sidebar picker writes this setting.
+- `harness.ai.defaultDestination` — Send questions to Harness AI (`harness`) or the selected external tool (`external`)
 
 ### Per-Workspace Override
 

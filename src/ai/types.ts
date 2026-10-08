@@ -12,3 +12,13 @@ export interface MCPDetectionState {
   activeScope: MCPScope | null;   // 'project' if configured there, else 'global' if configured there, else null
   conflict: boolean;              // true when both project AND global have harness configured
 }
+
+export interface DetectedTool {
+  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot' | 'kiro';
+  name: string;
+  sub: string | null;
+  mcpReady: boolean;
+  path?: string;
+  cursorMcpMode?: 'plugin' | 'local' | 'none';
+  cursorOAuthReady?: boolean;
+}

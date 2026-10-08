@@ -5,12 +5,12 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
 import { logger } from '../utils/logger';
 import { MCPScope, MCPDetectionState } from './types';
 
 export interface DetectedTool {
-  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot';
+  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot' | 'kiro';
   name: string;
   sub: string | null;
   mcpReady: boolean;
@@ -26,31 +26,53 @@ export interface DetectionResult {
   mcpScope: MCPDetectionState;    // NEW — full scope state for the webview
 }
 
+const CLAUDE_PATH_TIMEOUT_MS = 500;
+
+/**
+ * Session cache. Absent until the first definite answer.
+ * A null path means `which`/`where` confirmed Claude is not on PATH.
+ * Timeouts and other lookup failures are not cached.
+ */
+let claudePathCache: { path: string | null } | null = null;
+
+/**
+ * Resolve `claude` on PATH without starting Claude.
+ * A short async lookup keeps extension-host startup off the blocking `execSync` path.
+ * Pass `force` at send time so a CLI installed or removed during the session is honored.
+ */
+export function resolveClaudeExecutable(force = false): Promise<string | null> {
+  if (!force && claudePathCache) {
+    return Promise.resolve(claudePathCache.path);
+  }
+
+  const command = process.platform === 'win32' ? 'where' : 'which';
+  return new Promise((resolve) => {
+    execFile(command, ['claude'], { timeout: CLAUDE_PATH_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+      if (error) {
+        const lookup = error as Error & { killed?: boolean; signal?: NodeJS.Signals | null; code?: number | string };
+        // Exit code 1 is "not found". A timeout (killed/signal) or any other failure
+        // may succeed on the next try, so leave the cache empty.
+        const confirmedMissing = !lookup.killed && !lookup.signal && lookup.code === 1;
+        if (confirmedMissing) {
+          claudePathCache = { path: null };
+        }
+        resolve(null);
+        return;
+      }
+      const resolved = stdout.split(/\r?\n/).map(line => line.trim()).find(line => line.length > 0) ?? null;
+      claudePathCache = { path: resolved };
+      resolve(resolved);
+    });
+  });
+}
+
 /**
  * Detect Claude Code CLI by checking PATH
  */
 async function detectClaudeCLI(): Promise<DetectedTool | null> {
   try {
-    // Check if claude command exists
-    const command = process.platform === 'win32' ? 'where claude' : 'which claude';
-    const output = execSync(command, { encoding: 'utf-8', stdio: 'pipe' }).trim();
-
-    if (!output) {
-      return null;
-    }
-
-    const cliPath = output.split('\n')[0]; // Take first match
-
-    // Verify it's Claude Code CLI by checking version
-    try {
-      const versionOutput = execSync('claude --version', { encoding: 'utf-8', stdio: 'pipe', timeout: 3000 });
-
-      // Check if it's actually Claude Code (not some other claude command)
-      if (!versionOutput.toLowerCase().includes('claude')) {
-        return null;
-      }
-    } catch {
-      // If --version fails, assume it's not Claude Code
+    const cliPath = await resolveClaudeExecutable();
+    if (!cliPath) {
       return null;
     }
 
@@ -481,7 +503,82 @@ async function detectGitHubCopilot(): Promise<DetectedTool | null> {
 }
 
 /**
- * Detect all available AI tools (Claude Code CLI + Extension + Cursor + GitHub Copilot)
+ * Get Kiro MCP config paths (cross-platform)
+ * - Global: ~/.kiro/settings/mcp.json (macOS/Linux) or %APPDATA%\Kiro\settings\mcp.json (Windows)
+ * - Project: .kiro/settings/mcp.json in workspace root
+ */
+export function getKiroMcpPaths(): { local: string | null; global: string } {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  const local = workspaceFolder ? path.join(workspaceFolder.uri.fsPath, '.kiro', 'settings', 'mcp.json') : null;
+
+  let global: string;
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    global = path.join(appData, 'Kiro', 'settings', 'mcp.json');
+  } else {
+    // macOS/Linux
+    global = path.join(os.homedir(), '.kiro', 'settings', 'mcp.json');
+  }
+
+  return { local, global };
+}
+
+/**
+ * Check if Harness MCP entry exists in Kiro mcp.json
+ * Kiro uses the standard mcpServers format
+ */
+function hasKiroMcpEntry(kiroMcpPath: string): boolean {
+  if (!fs.existsSync(kiroMcpPath)) {
+    return false;
+  }
+
+  try {
+    const content = fs.readFileSync(kiroMcpPath, 'utf-8');
+    const config = JSON.parse(content);
+    const harnessServer = config?.mcpServers?.harness;
+    if (!harnessServer) {
+      return false;
+    }
+    const hasCommand = typeof harnessServer.command === 'string' && harnessServer.command.length > 0;
+    const hasEnv = harnessServer.env && typeof harnessServer.env === 'object';
+    return hasCommand && hasEnv;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect Kiro IDE
+ * Only detects when running inside Kiro editor
+ */
+async function detectKiro(): Promise<DetectedTool | null> {
+  try {
+    // Check if we're running in Kiro editor
+    const isKiroEditor = vscode.env.appName === 'Kiro';
+
+    if (!isKiroEditor) {
+      return null;
+    }
+
+    // Check MCP configuration (try both local and global)
+    const paths = getKiroMcpPaths();
+    const mcpReady = (paths.local && hasKiroMcpEntry(paths.local)) || hasKiroMcpEntry(paths.global);
+
+    return {
+      id: 'kiro',
+      name: 'Kiro',
+      sub: null,
+      mcpReady,
+      path: path.dirname(paths.global),
+    };
+  } catch (error) {
+    logger.error('Kiro Detection', 'Failed to detect Kiro:', error);
+    return null;
+  }
+}
+
+/**
+ * Detect all available AI tools (Claude Code CLI + Extension + Cursor + GitHub Copilot + Kiro)
  * Returns preferred tool as activeTool, or first available if no preference
  */
 export async function detectAITools(preferredToolId?: string): Promise<DetectionResult> {
@@ -509,6 +606,12 @@ export async function detectAITools(preferredToolId?: string): Promise<Detection
   const copilot = await detectGitHubCopilot();
   if (copilot) {
     tools.push(copilot);
+  }
+
+  // Detect Kiro
+  const kiro = await detectKiro();
+  if (kiro) {
+    tools.push(kiro);
   }
 
   // Use preferred tool if specified and available, otherwise default to first

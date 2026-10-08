@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode';
-import { getProjectMCPConfigPath, getGlobalMCPConfigPath, detectMCPScope } from './detector';
+import { getProjectMCPConfigPath, getGlobalMCPConfigPath, detectMCPScope, getKiroMcpPaths } from './detector';
 import { ensureMcpSecretsGitignored } from './mcpGitignore';
 import { logger } from '../utils/logger';
 import { MCPScope } from './types';
@@ -344,6 +344,129 @@ export async function removeCopilotMCPConfig(scope: MCPScope): Promise<void> {
     }
   } catch (error) {
     logger.error('MCP', 'Failed to remove Copilot MCP config:', error);
+    throw error;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kiro MCP Configuration
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build Harness MCP server config for Kiro
+ * Kiro uses standard mcpServers format (same as Claude Code)
+ */
+function buildKiroServerConfig(options: ConfigureOptions): MCPServerConfig {
+  const useEnvAuth = options.credentialSource === 'env';
+
+  return {
+    type: 'stdio',
+    command: 'npx',
+    args: ['harness-mcp-v2'],
+    env: {
+      // If using PAT auth, include credentials explicitly
+      ...(!useEnvAuth && {
+        HARNESS_API_KEY: options.apiKey,
+        HARNESS_BASE_URL: options.baseUrl || 'https://app.harness.io',
+        ...(options.accountId && { HARNESS_ACCOUNT_ID: options.accountId }),
+      }),
+      // Always include org/project IDs
+      ...(options.orgId && { HARNESS_ORG_ID: options.orgId }),
+      ...(options.projectId && { HARNESS_PROJECT_ID: options.projectId }),
+    },
+  };
+}
+
+/**
+ * Write Harness MCP config to Kiro's local or global scope
+ * Kiro uses mcpServers key (standard format)
+ */
+const PAT_ENV_KEYS = ['HARNESS_API_KEY', 'HARNESS_BASE_URL', 'HARNESS_ACCOUNT_ID'] as const;
+
+function writeKiroMcpConfig(filePath: string, harness: MCPServerConfig, dropPatCredentials: boolean): void {
+  // Ensure directory exists
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  let config: { mcpServers?: Record<string, MCPServerConfig> } = {};
+  if (fs.existsSync(filePath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    } catch {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.copyFileSync(filePath, `${filePath}.${ts}.bak`);
+      logger.warn('MCP', `Backed up invalid mcp.json at ${filePath}`);
+      config = {};
+    }
+  }
+
+  if (!config.mcpServers) config.mcpServers = {};
+  const existing = config.mcpServers.harness;
+  const env = { ...(existing?.env || {}), ...harness.env };
+  // Switching from PAT to env auth must not leave the previous API key in the file.
+  if (dropPatCredentials) {
+    for (const key of PAT_ENV_KEYS) delete env[key];
+  }
+  config.mcpServers.harness = {
+    ...harness,
+    command: existing?.command || harness.command,
+    args: existing?.args || harness.args,
+    env,
+  };
+
+  fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf-8');
+  logger.info('MCP', existing ? `Updated Harness MCP at ${filePath}` : `Created Harness MCP at ${filePath}`);
+  logger.info('MCP', 'IMPORTANT: Restart Kiro to activate MCP server');
+}
+
+/**
+ * Configure Harness MCP server for Kiro (local or global scope)
+ */
+export async function configureKiroMCP(options: ConfigureOptions): Promise<{ scope: MCPScope; path: string; gitignoreAdded?: string[] }> {
+  const harnessConfig: MCPServerConfig = buildKiroServerConfig(options);
+  const paths = getKiroMcpPaths();
+  const writesPatToProject = options.scope === 'project' && options.credentialSource !== 'env';
+
+  if (options.scope === 'project') {
+    if (!paths.local) {
+      throw new Error('No workspace folder is open. Open a folder before choosing project scope.');
+    }
+    writeKiroMcpConfig(paths.local, harnessConfig, options.credentialSource === 'env');
+    const gitignoreAdded = writesPatToProject ? await ensureMcpSecretsGitignored() : [];
+    return { scope: 'project', path: paths.local, gitignoreAdded };
+  }
+
+  writeKiroMcpConfig(paths.global, harnessConfig, options.credentialSource === 'env');
+  return { scope: 'global', path: paths.global };
+}
+
+/**
+ * Remove Harness MCP server from Kiro config
+ */
+export async function removeKiroMCPConfig(scope: MCPScope): Promise<void> {
+  const paths = getKiroMcpPaths();
+  const configPath = scope === 'project' ? paths.local : paths.global;
+
+  if (!configPath || !fs.existsSync(configPath)) {
+    return;
+  }
+
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    const config: { mcpServers?: Record<string, MCPServerConfig> } = JSON.parse(content);
+
+    if (config.mcpServers?.harness) {
+      delete config.mcpServers.harness;
+
+      const configJson = JSON.stringify(config, null, 2);
+      fs.writeFileSync(configPath, configJson, 'utf-8');
+
+      logger.info('MCP', `Removed Harness MCP server from Kiro ${scope} config`);
+    }
+  } catch (error) {
+    logger.error('MCP', 'Failed to remove Kiro MCP config:', error);
     throw error;
   }
 }

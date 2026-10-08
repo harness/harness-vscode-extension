@@ -288,10 +288,11 @@ Each service handles a specific domain:
 - **DiagnosticsManager**: Collects errors/warnings
 
 ### **AI Integration**
-- **Detector**: Auto-detects Claude Code, Copilot, Cursor
+- **Detector**: Auto-detects Claude Code, Copilot, Cursor, and Kiro; Claude PATH lookup is asynchronous and session-cached
 - **MCPConfigurer**: Sets up MCP server configuration
-- **Launcher**: Executes AI tool with context
-- **PromptBuilder**: Injects pipeline context into prompts
+- **ClaudeTerminalLauncher**: Opens a fresh integrated terminal with an interactive Claude session and shell-safe structured prompt
+- **Launcher**: Routes editor AI tools to their existing panels and Claude CLI to the terminal handoff
+- **PromptBuilder**: Injects pipeline context into prompts and enforces the terminal argv budget
 
 ---
 
@@ -309,12 +310,8 @@ harness.defaultView                → 'thisCommit' or 'allExecutions'
 harness.diffAwareSTO               → Limit STO to changed files
 harness.fmeSdkKey                  → Feature flag SDK key
 harness.logLevel                   → Logging verbosity
-harness.claudeCliTimeoutSeconds    → AI command timeout
-```
-
-### **Global State** (VS Code globalState)
-```
-harness.aiToolPreference           → Last selected AI tool
+harness.ai.preferredExternalTool   → External AI tool (auto or a detected tool id)
+harness.ai.defaultDestination      → harness or external
 ```
 
 ### **Secret Storage** (VS Code secrets)
@@ -363,7 +360,7 @@ harness.pat                        → Personal Access Token (encrypted)
 | **Language** | TypeScript |
 | **IDE Integration** | VS Code Extension API |
 | **UI Framework** | React (in webview) |
-| **HTTP Client** | Node.js built-in (fetch) |
+| **HTTP Client** | Node.js built-in (fetch), with an optional proxy/CA dispatcher (`src/utils/proxy.ts`) |
 | **State Management** | VS Code context/globalState |
 | **Feature Flags** | Split.io (FME SDK) |
 | **Build Tool** | esbuild |

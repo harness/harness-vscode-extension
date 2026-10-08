@@ -32,6 +32,7 @@ export type WebviewMessage =
   | { type: 'DEFAULT_VIEW_SAVED'; view: string }
   | { type: 'EXECUTION_ERROR'; message: string }
   | { type: 'STATE_UPDATE'; aiDetection?: { tools: Array<{ id: string; name: string; sub: string | null; mcpReady: boolean }>; activeTool: string | null; mcpConfigPath: string | null; mcpScope: { project: { path: string; configured: boolean } | null; global: { path: string; configured: boolean }; activeScope: 'project' | 'global' | null; conflict: boolean } }; aiDestination?: 'harness' | 'external' }
+  | { type: 'AIDA_STATUS'; status: 'checking' | 'enabled' | 'disabled' }
   | { type: 'AI_RESPONSE'; content: string; toolCalls?: Array<{ name: string; args?: unknown }>; durationMs?: number }
   | { type: 'AI_LAUNCHED'; tool: string }
   | { type: 'AI_CONFIG_DONE'; tool: string; scope: 'project' | 'global'; path: string }

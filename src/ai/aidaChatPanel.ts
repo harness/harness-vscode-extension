@@ -209,10 +209,17 @@ async function initAidaChatPanel(
 export function registerAidaChatPanelSerializer(
   vsContext: vscode.ExtensionContext,
   configManager: ConfigManager,
+  /** Optional admin gate: when it resolves false, the restored tab is closed instead of reopened. */
+  isAllowed?: () => Promise<boolean>,
 ): void {
   vsContext.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer('harnessIntelligenceChat', {
       async deserializeWebviewPanel(panel) {
+        if (isAllowed && !(await isAllowed())) {
+          logger.info('AidaChatPanel', 'Harness AI is disabled by admin; closing restored panel');
+          panel.dispose();
+          return;
+        }
         logger.debug('AidaChatPanel', 'Restoring Harness AI panel after reload');
         activePanel.panel = panel;
         panel.onDidDispose(() => { activePanel.panel = undefined; });

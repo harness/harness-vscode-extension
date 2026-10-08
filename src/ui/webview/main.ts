@@ -399,6 +399,9 @@ const state = {
   aiQuestion: '',
   aiShowToolPicker: false,
   aiDestination: 'harness' as 'harness' | 'external', // AI footer: native launcher vs external tool
+  // Admin gate for native Harness AI (Settings API `aida`). 'checking' until the first answer.
+  // Only an explicit 'disabled' hides "Ask Harness AI". External tools are never affected.
+  aidaStatus: 'checking' as 'checking' | 'enabled' | 'disabled',
   aiOverlay: null as 'mcp-setup' | 'mcp-existing' | 'mcp-conflict' | 'mcp-pat-warning' | 'mcp-done' | 'response' | 'launched' | null,
   aiMcpConfiguring: false,
   aiMcpSetupScope: 'project' as 'project' | 'global',          // NEW — which radio is selected
@@ -1070,6 +1073,11 @@ window.addEventListener('message', ({ data: msg }) => {
       }
       scheduleRender(true); // Force immediate render for state changes
       return; // Skip the scheduleRender at the end
+
+    case 'AIDA_STATUS':
+      state.aidaStatus = msg.status;
+      scheduleRender(true);
+      return;
 
     case 'AI_RESPONSE':
       state.aiState = 'ready';
@@ -1786,6 +1794,7 @@ const AI_TOOL_META: Record<string, { name: string; sub: string | null }> = {
   'claudecode-ext': { name: 'Claude Code', sub: 'Extension' },
   'cursor': { name: 'Cursor', sub: null },
   'copilot': { name: 'GitHub Copilot', sub: null },
+  'kiro': { name: 'Kiro', sub: null },
 };
 
 // Tool glyphs
@@ -1815,11 +1824,22 @@ function copilotGlyph(): string {
   </svg>`;
 }
 
+function kiroGlyph(): string {
+  // Kiro ghost, outline style: stroked body + solid eyes, all `currentColor` so it follows
+  // every theme (light/dark/high-contrast) and the badge accent/warning color.
+  // Shape from the Kiro ghost mark (kiro.dev/icon.svg), redrawn as stroke instead of fill.
+  return `<svg width="13" height="13" viewBox="-1 -1 26 26" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M4.594 6.677C6.67-2.226 18.746-2.211 21.16 6.632c.353 1.297 1.725 7.582-1.673 13.747-1.545 2.797-5.841 5.49-6.99 1.883C8.6 25.477 3.315 24.1 5.789 18.609l-.318.143c-3.57 1.305-3.863-1.208-3.173-2.513.45-.84.727-1.335.937-1.897.353-.975.458-1.568.593-2.498.27-1.837.277-3.607.765-5.167z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M12.964 6.687a.92.92 0 00-.81.428c-.217.323-.33.825-.33 1.462 0 .705.15 1.89 1.14 1.89h.008c.757 0 1.214-.705 1.214-1.89 0-.622-.127-1.125-.367-1.455a1.014 1.014 0 00-.855-.435zM17.044 6.687a.92.92 0 00-.81.428c-.217.323-.33.825-.33 1.462 0 .705.15 1.89 1.14 1.89h.008c.757 0 1.215-.705 1.215-1.89 0-.622-.128-1.125-.368-1.455a1.014 1.014 0 00-.855-.435z" fill="currentColor"/>
+  </svg>`;
+}
+
 function getAIToolGlyph(toolId: string): string {
   if (toolId === 'claudecode-cli') return claudeCliGlyph();
   if (toolId === 'claudecode-ext') return claudeExtGlyph();
   if (toolId === 'cursor') return cursorGlyph();
   if (toolId === 'copilot') return copilotGlyph();
+  if (toolId === 'kiro') return kiroGlyph();
   return '';
 }
 
@@ -1887,13 +1907,28 @@ function renderAIToolBadge(toolId: string | null, multi: boolean, warn: boolean)
   }
 }
 
+const AIDA_DISABLED_TEXT = 'Harness AI is disabled. Contact your administrator.';
+
+/**
+ * Where the AI footer actually points.
+ * While the permission check is in flight and the saved destination is Harness AI,
+ * return 'checking' so the footer does not paint Harness AI and then swap to an
+ * external tool if the API says it is disabled. An explicit disable falls back
+ * to external tools and leaves the preference untouched.
+ */
+function effectiveAiDestination(): 'harness' | 'external' | 'checking' {
+  if (state.aidaStatus === 'checking' && state.aiDestination === 'harness') return 'checking';
+  if (state.aidaStatus === 'disabled') return 'external';
+  return state.aiDestination;
+}
+
 function renderAIToolPicker(): string {
   if (!state.aiShowToolPicker) return '';
   const tools = state.aiDetection?.tools ?? [];
   const items = tools.map(tool => {
     const meta = AI_TOOL_META[tool.id];
     const glyph = getAIToolGlyph(tool.id);
-    const isActive = state.aiDestination === 'external' && tool.id === state.aiDetection?.activeTool;
+    const isActive = effectiveAiDestination() === 'external' && tool.id === state.aiDetection?.activeTool;
     const statusClass = tool.mcpReady ? 'is-ok' : 'is-warn';
     const statusText = tool.mcpReady ? 'MCP ready' : 'MCP not configured';
     const check = isActive ? `<span class="aix-picker-check">${checkIcon()}</span>` : '';
@@ -1905,14 +1940,23 @@ function renderAIToolPicker(): string {
       </span>${check}
     </button>`;
   }).join('');
-  const nativeActive = state.aiDestination === 'harness';
-  const nativeRow = `<button type="button" class="aix-picker-item ${nativeActive ? 'on' : ''}" data-action="selectHarnessAI">
+  const aidaOn = state.aidaStatus === 'enabled';
+  const nativeActive = aidaOn && state.aiDestination === 'harness';
+  const nativeRow = aidaOn
+    ? `<button type="button" class="aix-picker-item ${nativeActive ? 'on' : ''}" data-action="selectHarnessAI">
     <span class="aix-picker-ico aix-picker-ico-harness">${harnessIntelligenceIcon()}</span>
     <span class="aix-picker-text">
       <span class="aix-picker-name">Harness AI</span>
       <span class="aix-picker-status">Opens in a new IDE tab</span>
     </span>${nativeActive ? `<span class="aix-picker-check">${checkIcon()}</span>` : ''}
-  </button>`;
+  </button>`
+    : `<div class="aix-picker-item is-disabled" aria-disabled="true" title="${esc(state.aidaStatus === 'checking' ? 'Checking Harness AI availability…' : AIDA_DISABLED_TEXT)}">
+    <span class="aix-picker-ico aix-picker-ico-harness">${harnessIntelligenceIcon()}</span>
+    <span class="aix-picker-text">
+      <span class="aix-picker-name">Harness AI</span>
+      <span class="aix-picker-status is-warn">${state.aidaStatus === 'checking' ? 'Checking availability…' : 'Disabled by your administrator'}</span>
+    </span>
+  </div>`;
   const extSection = items
     ? `<div class="aix-picker-head">Use your favourite AI</div>${items}`
     : '';
@@ -2098,16 +2142,17 @@ function renderAILaunched(): string {
   const activeTool = state.aiDetection?.activeTool;
   if (!activeTool) return '';
   const meta = AI_TOOL_META[activeTool];
-  return `<div class="aix-overlay aix-overlay-launched"><span class="aix-overlay-check is-accent">${externalIcon()}</span><div class="aix-overlay-done-text"><strong>Opened in ${esc(meta.name)}</strong><span>Continue the conversation there.</span></div></div>`;
+  const title = activeTool === 'claudecode-cli' ? 'Opened Claude Code in Terminal' : `Opened in ${meta.name}`;
+  return `<div class="aix-overlay aix-overlay-launched"><span class="aix-overlay-check is-accent">${externalIcon()}</span><div class="aix-overlay-done-text"><strong>${esc(title)}</strong><span>Continue the conversation there.</span></div></div>`;
 }
 
-function aiFooter(): string {
-  const aiState = state.aiState;
-  const question = state.aiQuestion;
-  const detection = state.aiDetection;
+type AiEffectiveState = typeof state.aiState | 'cursor-no-plugin' | 'cursor-oauth-pending';
 
-  // Calculate effective state based on active tool
-  let effectiveState = aiState;
+/** Composer state after folding in the active tool's setup (Cursor plugin/OAuth, MCP readiness). */
+function getEffectiveAiState(): AiEffectiveState {
+  const aiState = state.aiState;
+  const detection = state.aiDetection;
+  let effectiveState: AiEffectiveState = aiState;
   const activeTool = detection?.tools.find(t => t.id === detection.activeTool);
 
   // Only override state for configuration-related states
@@ -2116,9 +2161,9 @@ function aiFooter(): string {
     // Cursor-specific states
     if (activeTool.id === 'cursor') {
       if ((activeTool as any).cursorMcpMode === 'none') {
-        effectiveState = 'cursor-no-plugin' as any;
+        effectiveState = 'cursor-no-plugin';
       } else if ((activeTool as any).cursorMcpMode === 'plugin' && !(activeTool as any).cursorOAuthReady) {
-        effectiveState = 'cursor-oauth-pending' as any;
+        effectiveState = 'cursor-oauth-pending';
       } else if (activeTool.mcpReady) {
         effectiveState = 'ready';
       } else {
@@ -2130,11 +2175,31 @@ function aiFooter(): string {
       effectiveState = activeTool.mcpReady ? 'ready' : 'unconfigured';
     }
   }
+  return effectiveState;
+}
 
-  const placeholders: Record<typeof aiState | 'cursor-no-plugin' | 'cursor-oauth-pending', string> = {
+/**
+ * Whether the external composer may send right now. An unconfigured MCP no longer
+ * blocks Send: the tool may be wired up another way (user-level config, plugin, etc.),
+ * so we let the tool report the problem. Missing tool, detection in progress, and
+ * Cursor plugin/OAuth setup still block.
+ */
+function canSendAI(): boolean {
+  const s = getEffectiveAiState();
+  if (s === 'ready') return true;
+  return s === 'unconfigured' && !!state.aiDetection?.activeTool;
+}
+
+function aiFooter(): string {
+  const aiState = state.aiState;
+  const question = state.aiQuestion;
+  const detection = state.aiDetection;
+  const effectiveState = getEffectiveAiState();
+
+  const placeholders: Record<AiEffectiveState, string> = {
     detecting: 'Detecting AI tools…',
     none: 'Install Claude Code to ask questions',
-    unconfigured: 'Configure MCP to ask questions',
+    unconfigured: 'Ask about this pipeline…',
     ready: 'Ask about this pipeline…',
     sending: question || 'Thinking…',
     error: 'Ask about this pipeline…',
@@ -2142,7 +2207,7 @@ function aiFooter(): string {
     'cursor-oauth-pending': 'Connect your Harness account in Cursor',
   };
   const inputDisabled = effectiveState === 'detecting' || effectiveState === 'none' || effectiveState === 'sending' || effectiveState === 'cursor-no-plugin' || effectiveState === 'cursor-oauth-pending';
-  const sendDisabled = effectiveState !== 'ready' || !state.aiQuestion.trim();
+  const sendDisabled = !canSendAI() || !state.aiQuestion.trim();
   let badgeHtml = '';
   if (effectiveState === 'detecting') badgeHtml = `<div class="aix-detect"><span class="aix-spinner"></span></div>`;
   else if (effectiveState === 'none') badgeHtml = renderAIToolBadge(null, false, false);
@@ -2153,7 +2218,7 @@ function aiFooter(): string {
   const sendContent = effectiveState === 'sending' ? '<span class="aix-send-spin"></span>' : sendIcon();
   let statusHtml = '';
   if (effectiveState !== 'none') {
-    const statusLines: Record<typeof aiState | 'cursor-no-plugin' | 'cursor-oauth-pending', { dot: string; text: string; link?: string }> = {
+    const statusLines: Record<AiEffectiveState, { dot: string; text: string; link?: string }> = {
       detecting: { dot: 'pulse', text: 'Detecting AI tools…' },
       none: { dot: 'err', text: 'No AI tool found', link: 'Install Claude Code ↗' },
       unconfigured: { dot: 'warn', text: `MCP not configured · ${AI_TOOL_META[detection?.activeTool || '']?.name || ''}`, link: 'Configure MCP ›' },
@@ -2171,8 +2236,22 @@ function aiFooter(): string {
   }
   const overlays = `${renderAIToolPicker()}${renderAIMCPCard()}${renderAIResponse()}${renderAILaunched()}`;
 
+  // ── Admin gate ──
+  // While the permission check is still running, stay on a neutral notice when
+  // the saved destination is Harness AI. Painting "Ask Harness AI" first would
+  // blink into the external composer if the API says it is disabled.
+  // With no external tool either, stay neutral instead of blaming the admin
+  // before detection or the settings lookup has finished.
+  const aidaOn = state.aidaStatus === 'enabled';
+  const destination = effectiveAiDestination();
+  if (destination === 'checking' || (!aidaOn && (detection?.tools.length ?? 0) === 0)) {
+    const waiting = destination === 'checking' || state.aidaStatus === 'checking' || !detection;
+    const noticeText = waiting ? 'Checking Harness AI availability…' : AIDA_DISABLED_TEXT;
+    return `<div class="aix aix-aida-unavailable">${overlays}<div class="aix-notice">${waiting ? '<span class="aix-spinner"></span>' : `<span class="aix-notice-ico">${warnIcon()}</span>`}<span>${esc(noticeText)}</span></div></div>`;
+  }
+
   // ── Destination: Harness AI (native launcher) ──
-  if (state.aiDestination === 'harness') {
+  if (destination === 'harness') {
     const caret = `<button type="button" class="aix-split-caret" data-action="toggleAIToolPicker" aria-label="Choose AI">${chevDownIcon()}</button>`;
     const main = `<button type="button" class="aix-split-main" data-action="openHarnessChat">
       <span class="aix-split-ico">${harnessIntelligenceIcon()}</span>
@@ -2183,10 +2262,14 @@ function aiFooter(): string {
   }
 
   // ── Destination: external tool (composer) ──
-  const backLink = `<button type="button" class="aix-back" data-action="selectHarnessAI">↺ Harness AI</button>`;
+  // The "back to Harness AI" link only makes sense while native Harness AI is available.
+  // When the admin disabled it, the explanation lives in the tool picker (not in the footer).
+  const backLink = aidaOn
+    ? `<button type="button" class="aix-back" data-action="selectHarnessAI">↺ Harness AI</button>`
+    : '';
   const statusWithBack = statusHtml
     ? statusHtml.replace('</div>', `${backLink}</div>`)
-    : `<div class="aix-status">${backLink}</div>`;
+    : (backLink ? `<div class="aix-status">${backLink}</div>` : '');
   return `<div class="aix aix-${effectiveState}">${overlays}<div class="aix-bar">${badgeHtml}<input class="aix-inp" placeholder="${esc(placeholders[effectiveState])}" value="${esc(question)}" ${inputDisabled ? 'disabled' : ''} data-action="aiInput"/><button type="button" class="aix-send" ${sendDisabled ? 'disabled' : ''} data-action="sendAI">${sendContent}</button></div>${statusWithBack}</div>`;
 }
 
@@ -4781,7 +4864,7 @@ function bind(): void {
       // Update send button disabled state without full re-render
       const sendBtn = document.querySelector('[data-action="sendAI"]') as HTMLButtonElement;
       if (sendBtn) {
-        const shouldEnable = state.aiState === 'ready' && target.value.trim().length > 0;
+        const shouldEnable = canSendAI() && target.value.trim().length > 0;
         if (shouldEnable) {
           sendBtn.removeAttribute('disabled');
         } else {
@@ -4820,6 +4903,7 @@ function bind(): void {
     // Harness Intelligence Chat button
     if (action === 'openHarnessChat') {
       e.preventDefault();
+      if (state.aidaStatus === 'disabled') return; // disabled by admin (host re-checks too)
       vscode.postMessage({ type: 'OPEN_INTELLIGENCE_CHAT' });
       return;
     }
@@ -4855,6 +4939,7 @@ function bind(): void {
     } else if (action === 'selectHarnessAI') {
       e.preventDefault();
       e.stopPropagation();
+      if (state.aidaStatus !== 'enabled') return;
       state.aiShowToolPicker = false;
       state.aiDestination = 'harness';
       vscode.postMessage({ type: 'AI_SET_DESTINATION', destination: 'harness' });
@@ -5014,8 +5099,8 @@ function sendAIMessage(): void {
     return;
   }
 
-  if (state.aiState !== 'ready') {
-    console.log('[AI] ❌ Send blocked - state is not ready, current state:', state.aiState);
+  if (!canSendAI()) {
+    console.log('[AI] ❌ Send blocked - composer not ready, current state:', state.aiState);
     return;
   }
 
