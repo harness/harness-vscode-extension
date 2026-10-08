@@ -167,6 +167,18 @@
           "default": "https://app.harness.io",
           "description": "Harness instance URL. Change for on-prem deployments."
         },
+        "harness.proxy": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "HTTP(S) proxy URL for all extension network requests (e.g. `http://proxy.example.com:8080`); must start with `http://` or `https://`. Leave empty to use the standard `https_proxy`/`HTTPS_PROXY`/`http_proxy`/`HTTP_PROXY` environment variables; `NO_PROXY` is honored only for environment-variable proxies and not for feature-flag traffic. VS Code's own `http.proxy`/`http.proxySupport` settings also apply and may take precedence on recent VS Code versions. Feature-flag traffic picks up changes after **Developer: Reload Window**; environment variable changes require restarting VS Code. Settings are stored in plain text — prefer environment variables if your proxy requires credentials."
+        },
+        "harness.caBundle": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Absolute path to a PEM CA bundle for private or TLS-inspecting proxy certificate authorities. Node.js and OS root certificates are trusted automatically."
+        },
         "harness.accountIdentifier": {
           "type": "string",
           "default": "",
@@ -294,6 +306,8 @@
   },
   "dependencies": {
     "@splitsoftware/splitio": "^11.11.1",
-    "marked": "^12.0.2"
+    "https-proxy-agent": "^7.0.6",
+    "marked": "^12.0.2",
+    "undici": "^6.21.1"
   }
 }
