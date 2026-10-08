@@ -7,7 +7,6 @@ export const TRUNCATION_MARKER = ' …';
 
 const POSIX_ARGV_BUDGET = 200_000;
 const POWERSHELL_ENCODED_BUDGET = 30_000;
-const CMD_LINE_BUDGET = 7_000;
 
 export type ClaudeShellLaunch =
   | { ok: true; shellPath: string; shellArgs: string[] | string }
@@ -19,12 +18,6 @@ export function shellSingleQuote(value: string): string {
 
 export function psSingleQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
-}
-
-/** Double-quote for cmd. Returns null when the value can break out of the quotes. */
-export function cmdDoubleQuote(value: string): string | null {
-  if (/[\u0000-\u001f%!&|<>^"]/.test(value)) return null;
-  return `"${value}"`;
 }
 
 export function encodePowerShellCommand(script: string): string {
@@ -66,6 +59,19 @@ function shrinkToFit(prompt: string, fits: (candidate: string) => boolean): stri
 const UNSUPPORTED_SHELL =
   'This shell cannot safely launch Claude with the current prompt. Switch the default terminal to PowerShell, bash, or zsh.';
 
+/** Windows PowerShell 5.1 is present on every Windows install, so cmd can hand off to it. */
+const WINDOWS_POWERSHELL = 'powershell.exe';
+
+function powershellLaunch(shellPath: string, claudePath: string, prompt: string): ClaudeShellLaunch {
+  const fitted = shrinkToFit(prompt, (candidate) => {
+    const script = `& ${psSingleQuote(claudePath)} ${psSingleQuote(candidate)}`;
+    return encodePowerShellCommand(script).length <= POWERSHELL_ENCODED_BUDGET;
+  });
+  if (!fitted) return { ok: false, error: UNSUPPORTED_SHELL };
+  const encoded = encodePowerShellCommand(`& ${psSingleQuote(claudePath)} ${psSingleQuote(fitted)}`);
+  return { ok: true, shellPath, shellArgs: ['-NoExit', '-EncodedCommand', encoded] };
+}
+
 /**
  * Build shell args that start interactive Claude, then return to a normal shell when it exits.
  */
@@ -88,38 +94,19 @@ export function buildClaudeShellLaunch(input: {
   const windows = input.platform === 'win32';
 
   if (windows && (name === 'powershell' || name === 'pwsh')) {
-    const prompt = shrinkToFit(input.prompt, (candidate) => {
-      const script = `& ${psSingleQuote(claudePath)} ${psSingleQuote(candidate)}`;
-      return encodePowerShellCommand(script).length <= POWERSHELL_ENCODED_BUDGET;
-    });
-    if (!prompt) return { ok: false, error: UNSUPPORTED_SHELL };
-    const encoded = encodePowerShellCommand(`& ${psSingleQuote(claudePath)} ${psSingleQuote(prompt)}`);
-    return { ok: true, shellPath, shellArgs: ['-NoExit', '-EncodedCommand', encoded] };
+    return powershellLaunch(shellPath, claudePath, input.prompt);
   }
 
+  // cmd cannot quote a multi-line prompt. Hand off to Windows PowerShell instead.
   if (windows && name === 'cmd') {
-    // Newlines and cmd metacharacters cannot be quoted safely. Truncating would drop them
-    // and launch a different prompt, so refuse instead.
-    if (!cmdDoubleQuote(claudePath) || !cmdDoubleQuote(input.prompt)) {
-      return { ok: false, error: UNSUPPORTED_SHELL };
-    }
-    const prompt = shrinkToFit(input.prompt, (candidate) => {
-      const exe = cmdDoubleQuote(claudePath);
-      const arg = cmdDoubleQuote(candidate);
-      if (!exe || !arg) return false;
-      return `/K ${exe} ${arg}`.length <= CMD_LINE_BUDGET;
-    });
-    if (!prompt) return { ok: false, error: UNSUPPORTED_SHELL };
-    const exe = cmdDoubleQuote(claudePath);
-    const arg = cmdDoubleQuote(prompt);
-    if (!exe || !arg) return { ok: false, error: UNSUPPORTED_SHELL };
-    return { ok: true, shellPath, shellArgs: `/K ${exe} ${arg}` };
+    return powershellLaunch(WINDOWS_POWERSHELL, claudePath, input.prompt);
   }
 
-  if (windows && name !== 'bash' && name !== 'zsh' && name !== 'sh') {
+  if (windows && name !== 'bash' && name !== 'zsh') {
     return { ok: false, error: UNSUPPORTED_SHELL };
   }
-  if (name === 'fish' || name === 'nu' || name === 'nushell') {
+  // dash (often /bin/sh) rejects -l, so it cannot run the login-shell handoff.
+  if (name === 'sh' || name === 'fish' || name === 'nu' || name === 'nushell') {
     return { ok: false, error: UNSUPPORTED_SHELL };
   }
 

@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode';
-import { getProjectMCPConfigPath, getGlobalMCPConfigPath, detectMCPScope } from './detector';
+import { getProjectMCPConfigPath, getGlobalMCPConfigPath, detectMCPScope, getKiroMcpPaths } from './detector';
 import { ensureMcpSecretsGitignored } from './mcpGitignore';
 import { logger } from '../utils/logger';
 import { MCPScope } from './types';
@@ -353,27 +353,6 @@ export async function removeCopilotMCPConfig(scope: MCPScope): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Get Kiro MCP config paths (cross-platform)
- * - Global: ~/.kiro/settings/mcp.json (macOS/Linux) or %APPDATA%\Kiro\settings\mcp.json (Windows)
- * - Local (project): .kiro/settings/mcp.json in workspace root
- */
-function getKiroMcpPaths(): { local: string | null; global: string } {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  const local = workspaceFolder ? path.join(workspaceFolder.uri.fsPath, '.kiro', 'settings', 'mcp.json') : null;
-
-  let global: string;
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-    global = path.join(appData, 'Kiro', 'settings', 'mcp.json');
-  } else {
-    // macOS/Linux
-    global = path.join(os.homedir(), '.kiro', 'settings', 'mcp.json');
-  }
-
-  return { local, global };
-}
-
-/**
  * Build Harness MCP server config for Kiro
  * Kiro uses standard mcpServers format (same as Claude Code)
  */
@@ -402,7 +381,9 @@ function buildKiroServerConfig(options: ConfigureOptions): MCPServerConfig {
  * Write Harness MCP config to Kiro's local or global scope
  * Kiro uses mcpServers key (standard format)
  */
-function writeKiroMcpConfig(filePath: string, harness: MCPServerConfig): void {
+const PAT_ENV_KEYS = ['HARNESS_API_KEY', 'HARNESS_BASE_URL', 'HARNESS_ACCOUNT_ID'] as const;
+
+function writeKiroMcpConfig(filePath: string, harness: MCPServerConfig, dropPatCredentials: boolean): void {
   // Ensure directory exists
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
@@ -423,11 +404,16 @@ function writeKiroMcpConfig(filePath: string, harness: MCPServerConfig): void {
 
   if (!config.mcpServers) config.mcpServers = {};
   const existing = config.mcpServers.harness;
+  const env = { ...(existing?.env || {}), ...harness.env };
+  // Switching from PAT to env auth must not leave the previous API key in the file.
+  if (dropPatCredentials) {
+    for (const key of PAT_ENV_KEYS) delete env[key];
+  }
   config.mcpServers.harness = {
     ...harness,
     command: existing?.command || harness.command,
     args: existing?.args || harness.args,
-    env: { ...(existing?.env || {}), ...harness.env },
+    env,
   };
 
   fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf-8');
@@ -447,12 +433,12 @@ export async function configureKiroMCP(options: ConfigureOptions): Promise<{ sco
     if (!paths.local) {
       throw new Error('No workspace folder is open. Open a folder before choosing project scope.');
     }
-    writeKiroMcpConfig(paths.local, harnessConfig);
+    writeKiroMcpConfig(paths.local, harnessConfig, options.credentialSource === 'env');
     const gitignoreAdded = writesPatToProject ? await ensureMcpSecretsGitignored() : [];
     return { scope: 'project', path: paths.local, gitignoreAdded };
   }
 
-  writeKiroMcpConfig(paths.global, harnessConfig);
+  writeKiroMcpConfig(paths.global, harnessConfig, options.credentialSource === 'env');
   return { scope: 'global', path: paths.global };
 }
 

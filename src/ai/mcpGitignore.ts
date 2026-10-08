@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { logger } from '../utils/logger';
 
 /** MCP config paths that may contain PAT credentials when using project scope. */
-export const MCP_SECRET_GITIGNORE_ENTRIES = ['.mcp.json', '.vscode/mcp.json'] as const;
+export const MCP_SECRET_GITIGNORE_ENTRIES = ['.mcp.json', '.vscode/mcp.json', '.kiro/settings/mcp.json'] as const;
 
 const GITIGNORE_MARKER = '# Harness VS Code extension — MCP configs may contain API keys';
 

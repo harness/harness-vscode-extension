@@ -354,14 +354,7 @@ async function launchKiro(prompt: string): Promise<LaunchResult> {
     logger.debug('AI Launcher', 'Starting Kiro integration');
     logger.debug('AI Launcher', 'Prompt length:', prompt.length);
 
-    // List all available commands to find the right one
     const allCommands = await vscode.commands.getCommands(true);
-    const kiroCommands = allCommands.filter(cmd =>
-      cmd.toLowerCase().includes('kiro') ||
-      cmd.toLowerCase().includes('ai') ||
-      cmd.toLowerCase().includes('chat')
-    );
-    logger.debug('AI Launcher', 'Available Kiro commands:', kiroCommands);
 
     // Copy prompt to clipboard
     await vscode.env.clipboard.writeText(prompt);
@@ -377,7 +370,7 @@ async function launchKiro(prompt: string): Promise<LaunchResult> {
 
     let opened = false;
     for (const cmd of commandsToTry) {
-      if (kiroCommands.includes(cmd) || allCommands.includes(cmd)) {
+      if (allCommands.includes(cmd)) {
         try {
           logger.debug('AI Launcher', `⏳ Trying command: ${cmd}`);
           await vscode.commands.executeCommand(cmd);
@@ -410,7 +403,7 @@ async function launchKiro(prompt: string): Promise<LaunchResult> {
 
       // Show brief success notification
       vscode.window.showInformationMessage(
-        '✅ Prompt sent to Kiro AI Chat',
+        'Prompt pasted into Kiro AI Chat',
         { modal: false }
       );
     } catch (err) {

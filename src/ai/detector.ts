@@ -10,7 +10,7 @@ import { logger } from '../utils/logger';
 import { MCPScope, MCPDetectionState } from './types';
 
 export interface DetectedTool {
-  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot';
+  id: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot' | 'kiro';
   name: string;
   sub: string | null;
   mcpReady: boolean;
@@ -28,7 +28,11 @@ export interface DetectionResult {
 
 const CLAUDE_PATH_TIMEOUT_MS = 500;
 
-/** Session cache. Absent until the first lookup; a null path means Claude is not on PATH. */
+/**
+ * Session cache. Absent until the first definite answer.
+ * A null path means `which`/`where` confirmed Claude is not on PATH.
+ * Timeouts and other lookup failures are not cached.
+ */
 let claudePathCache: { path: string | null } | null = null;
 
 /**
@@ -44,9 +48,18 @@ export function resolveClaudeExecutable(force = false): Promise<string | null> {
   const command = process.platform === 'win32' ? 'where' : 'which';
   return new Promise((resolve) => {
     execFile(command, ['claude'], { timeout: CLAUDE_PATH_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
-      const resolved = error
-        ? null
-        : stdout.split(/\r?\n/).map(line => line.trim()).find(line => line.length > 0) ?? null;
+      if (error) {
+        const lookup = error as Error & { killed?: boolean; signal?: NodeJS.Signals | null; code?: number | string };
+        // Exit code 1 is "not found". A timeout (killed/signal) or any other failure
+        // may succeed on the next try, so leave the cache empty.
+        const confirmedMissing = !lookup.killed && !lookup.signal && lookup.code === 1;
+        if (confirmedMissing) {
+          claudePathCache = { path: null };
+        }
+        resolve(null);
+        return;
+      }
+      const resolved = stdout.split(/\r?\n/).map(line => line.trim()).find(line => line.length > 0) ?? null;
       claudePathCache = { path: resolved };
       resolve(resolved);
     });
@@ -494,7 +507,7 @@ async function detectGitHubCopilot(): Promise<DetectedTool | null> {
  * - Global: ~/.kiro/settings/mcp.json (macOS/Linux) or %APPDATA%\Kiro\settings\mcp.json (Windows)
  * - Project: .kiro/settings/mcp.json in workspace root
  */
-function getKiroMcpPaths(): { local: string | null; global: string } {
+export function getKiroMcpPaths(): { local: string | null; global: string } {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   const local = workspaceFolder ? path.join(workspaceFolder.uri.fsPath, '.kiro', 'settings', 'mcp.json') : null;
 
