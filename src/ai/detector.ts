@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
 import { logger } from '../utils/logger';
 import { MCPScope, MCPDetectionState } from './types';
 
@@ -26,31 +26,40 @@ export interface DetectionResult {
   mcpScope: MCPDetectionState;    // NEW — full scope state for the webview
 }
 
+const CLAUDE_PATH_TIMEOUT_MS = 500;
+
+/** Session cache. Absent until the first lookup; a null path means Claude is not on PATH. */
+let claudePathCache: { path: string | null } | null = null;
+
+/**
+ * Resolve `claude` on PATH without starting Claude.
+ * A short async lookup keeps extension-host startup off the blocking `execSync` path.
+ * Pass `force` at send time so a CLI installed or removed during the session is honored.
+ */
+export function resolveClaudeExecutable(force = false): Promise<string | null> {
+  if (!force && claudePathCache) {
+    return Promise.resolve(claudePathCache.path);
+  }
+
+  const command = process.platform === 'win32' ? 'where' : 'which';
+  return new Promise((resolve) => {
+    execFile(command, ['claude'], { timeout: CLAUDE_PATH_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+      const resolved = error
+        ? null
+        : stdout.split(/\r?\n/).map(line => line.trim()).find(line => line.length > 0) ?? null;
+      claudePathCache = { path: resolved };
+      resolve(resolved);
+    });
+  });
+}
+
 /**
  * Detect Claude Code CLI by checking PATH
  */
 async function detectClaudeCLI(): Promise<DetectedTool | null> {
   try {
-    // Check if claude command exists
-    const command = process.platform === 'win32' ? 'where claude' : 'which claude';
-    const output = execSync(command, { encoding: 'utf-8', stdio: 'pipe' }).trim();
-
-    if (!output) {
-      return null;
-    }
-
-    const cliPath = output.split('\n')[0]; // Take first match
-
-    // Verify it's Claude Code CLI by checking version
-    try {
-      const versionOutput = execSync('claude --version', { encoding: 'utf-8', stdio: 'pipe', timeout: 3000 });
-
-      // Check if it's actually Claude Code (not some other claude command)
-      if (!versionOutput.toLowerCase().includes('claude')) {
-        return null;
-      }
-    } catch {
-      // If --version fails, assume it's not Claude Code
+    const cliPath = await resolveClaudeExecutable();
+    if (!cliPath) {
       return null;
     }
 

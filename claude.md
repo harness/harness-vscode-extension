@@ -43,7 +43,8 @@ A VS Code sidebar extension that surfaces Harness pipeline execution (CI, CD, ST
 | `src/logs/logEditorTab.ts` | Opens step logs in editor tabs with syntax highlighting |
 | `src/ai/detector.ts` | Detects Claude Code CLI/Extension/Cursor/Copilot/Kiro and checks MCP configuration |
 | `src/ai/mcpConfigurer.ts` | Writes Harness MCP server config to `~/.claude.json`, Cursor, Copilot, and Kiro MCP configs |
-| `src/ai/launcher.ts` | Launches Claude Code CLI/Extension, Cursor, Copilot, or Kiro with prompts |
+| `src/ai/launcher.ts` | Launches Claude Code in the integrated terminal, or Claude Code Extension, Cursor, Copilot, or Kiro |
+| `src/ai/claudeTerminalLauncher.ts` | Opens a new terminal running interactive Claude with the prompt baked into the shell args |
 | `src/ai/aidaChatPanel.ts` | Harness AI Chat panel — SSE streaming, markdown, history cards, session title header, split input + MCP pill, elicitation cards, pipeline-context chip, ⌘⇧H focus |
 
 ---
@@ -248,7 +249,7 @@ A single action button on each execution card swaps based on status:
 Supports **Claude Code** (CLI/Extension), **Cursor AI**, **GitHub Copilot**, and **Kiro** with automatic context injection via MCP.
 
 ### Claude Code
-- **CLI mode**: Fully automated (spawns subprocess, response in sidebar)
+- **CLI mode**: Opens Claude Code in the integrated terminal with a structured prompt. The conversation continues in that terminal. Claude discovers MCP from its normal startup (`.mcp.json` / `~/.claude.json`).
 - **Extension mode**: Semi-automated (auto-opens panel, auto-pastes prompt)
 - MCP config written to `~/.claude.json`
 
@@ -435,7 +436,7 @@ GET /ng/api/settings/aida?accountIdentifier=…&orgIdentifier=…&projectIdentif
 - **Background, non-blocking:** `startPoller()` calls `aida.start(config)` without awaiting. On error it retries after 5s, 15s, 30s, then every 60s until a real true/false answer. A new org/project resets to `checking`; other config changes don't flicker the footer.
 - **Fresh check on open:** `harness.openIntelligenceChat`, the webview `OPEN_INTELLIGENCE_CHAT` message, and panel restore after reload call `aida.refresh()`; when it is not `true` the panel stays closed and "Harness AI is disabled. Contact your administrator." is shown.
 - **Host → webview:** `AIDA_STATUS` (`checking` | `enabled` | `disabled`). Re-sent on `WEBVIEW_READY`. Also sets the context key `harness.aidaEnabled` (editor-title button `when` clause).
-- **Sidebar footer:** not enabled → falls back to the external composer (picker shows Harness AI as non-selectable); no external tool → plain notice. The persisted `harness.aiDestination` is not modified. `checking` is neutral (no "disabled" wording).
+- **Sidebar footer:** `checking` renders a neutral availability notice when Harness AI is the saved destination, preventing either destination from flashing before the API answers. `disabled` falls back to the external composer (picker shows Harness AI as non-selectable); no external tool → plain notice. The persisted `harness.ai.defaultDestination` is not modified.
 - **Reuse:** `getSetting`, `fetchBooleanSetting` (true/false/null) and `getBooleanSetting` in `src/api/settingsService.ts` can read any other Harness setting.
 
 **External composer Send:** enabled when MCP is not detected (`unconfigured`) as long as a tool is detected; still blocked for no tool, detection in progress, Cursor plugin missing, and Cursor OAuth pending (`canSendAI()` in `main.ts`).
@@ -453,6 +454,10 @@ GET /ng/api/settings/aida?accountIdentifier=…&orgIdentifier=…&projectIdentif
 - `harness.pollingIntervalSeconds` — Polling frequency (default: 10s)
 - `harness.defaultView` — Default view (`pipelines` or `executions`)
 - `harness.logLevel` — Console verbosity (`off`/`error`/`warn`/`info`/`debug`)
+
+**AI Tools:**
+- `harness.ai.preferredExternalTool` — External tool used when the destination is External (`auto`, `claudecode-cli`, `claudecode-ext`, `cursor`, `copilot`, `kiro`). Harness AI is chosen with `harness.ai.defaultDestination`. The sidebar picker writes this setting.
+- `harness.ai.defaultDestination` — `harness` or `external`
 
 **Workspace Settings (optional overrides):**
 - `harness.orgIdentifier`

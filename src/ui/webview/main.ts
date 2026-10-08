@@ -399,8 +399,8 @@ const state = {
   aiQuestion: '',
   aiShowToolPicker: false,
   aiDestination: 'harness' as 'harness' | 'external', // AI footer: native launcher vs external tool
-  // Admin gate for native Harness AI (Settings API `aida`). 'checking' until the first answer;
-  // anything but 'enabled' hides "Ask Harness AI". External tools are never affected.
+  // Admin gate for native Harness AI (Settings API `aida`). 'checking' until the first answer.
+  // Only an explicit 'disabled' hides "Ask Harness AI". External tools are never affected.
   aidaStatus: 'checking' as 'checking' | 'enabled' | 'disabled',
   aiOverlay: null as 'mcp-setup' | 'mcp-existing' | 'mcp-conflict' | 'mcp-pat-warning' | 'mcp-done' | 'response' | 'launched' | null,
   aiMcpConfiguring: false,
@@ -1910,12 +1910,16 @@ function renderAIToolBadge(toolId: string | null, multi: boolean, warn: boolean)
 const AIDA_DISABLED_TEXT = 'Harness AI is disabled. Contact your administrator.';
 
 /**
- * Where the AI footer actually points. When the admin gate is not 'enabled',
- * native Harness AI is unavailable, so the footer falls back to external tools
- * regardless of the persisted preference (which is left untouched).
+ * Where the AI footer actually points.
+ * While the permission check is in flight and the saved destination is Harness AI,
+ * return 'checking' so the footer does not paint Harness AI and then swap to an
+ * external tool if the API says it is disabled. An explicit disable falls back
+ * to external tools and leaves the preference untouched.
  */
-function effectiveAiDestination(): 'harness' | 'external' {
-  return state.aidaStatus === 'enabled' ? state.aiDestination : 'external';
+function effectiveAiDestination(): 'harness' | 'external' | 'checking' {
+  if (state.aidaStatus === 'checking' && state.aiDestination === 'harness') return 'checking';
+  if (state.aidaStatus === 'disabled') return 'external';
+  return state.aiDestination;
 }
 
 function renderAIToolPicker(): string {
@@ -2138,7 +2142,8 @@ function renderAILaunched(): string {
   const activeTool = state.aiDetection?.activeTool;
   if (!activeTool) return '';
   const meta = AI_TOOL_META[activeTool];
-  return `<div class="aix-overlay aix-overlay-launched"><span class="aix-overlay-check is-accent">${externalIcon()}</span><div class="aix-overlay-done-text"><strong>Opened in ${esc(meta.name)}</strong><span>Continue the conversation there.</span></div></div>`;
+  const title = activeTool === 'claudecode-cli' ? 'Opened Claude Code in Terminal' : `Opened in ${meta.name}`;
+  return `<div class="aix-overlay aix-overlay-launched"><span class="aix-overlay-check is-accent">${externalIcon()}</span><div class="aix-overlay-done-text"><strong>${esc(title)}</strong><span>Continue the conversation there.</span></div></div>`;
 }
 
 type AiEffectiveState = typeof state.aiState | 'cursor-no-plugin' | 'cursor-oauth-pending';
@@ -2231,18 +2236,22 @@ function aiFooter(): string {
   }
   const overlays = `${renderAIToolPicker()}${renderAIMCPCard()}${renderAIResponse()}${renderAILaunched()}`;
 
-  // ── Admin gate: native Harness AI unavailable and nothing else to fall back to ──
-  // Show a notice instead of a composer. While detection hasn't finished (or the
-  // first settings lookup is in flight) stay neutral rather than blaming the admin.
+  // ── Admin gate ──
+  // While the permission check is still running, stay on a neutral notice when
+  // the saved destination is Harness AI. Painting "Ask Harness AI" first would
+  // blink into the external composer if the API says it is disabled.
+  // With no external tool either, stay neutral instead of blaming the admin
+  // before detection or the settings lookup has finished.
   const aidaOn = state.aidaStatus === 'enabled';
-  if (!aidaOn && (detection?.tools.length ?? 0) === 0) {
-    const waiting = state.aidaStatus === 'checking' || !detection;
+  const destination = effectiveAiDestination();
+  if (destination === 'checking' || (!aidaOn && (detection?.tools.length ?? 0) === 0)) {
+    const waiting = destination === 'checking' || state.aidaStatus === 'checking' || !detection;
     const noticeText = waiting ? 'Checking Harness AI availability…' : AIDA_DISABLED_TEXT;
     return `<div class="aix aix-aida-unavailable">${overlays}<div class="aix-notice">${waiting ? '<span class="aix-spinner"></span>' : `<span class="aix-notice-ico">${warnIcon()}</span>`}<span>${esc(noticeText)}</span></div></div>`;
   }
 
   // ── Destination: Harness AI (native launcher) ──
-  if (effectiveAiDestination() === 'harness') {
+  if (destination === 'harness') {
     const caret = `<button type="button" class="aix-split-caret" data-action="toggleAIToolPicker" aria-label="Choose AI">${chevDownIcon()}</button>`;
     const main = `<button type="button" class="aix-split-main" data-action="openHarnessChat">
       <span class="aix-split-ico">${harnessIntelligenceIcon()}</span>
@@ -4894,7 +4903,7 @@ function bind(): void {
     // Harness Intelligence Chat button
     if (action === 'openHarnessChat') {
       e.preventDefault();
-      if (state.aidaStatus !== 'enabled') return; // disabled by admin (host re-checks too)
+      if (state.aidaStatus === 'disabled') return; // disabled by admin (host re-checks too)
       vscode.postMessage({ type: 'OPEN_INTELLIGENCE_CHAT' });
       return;
     }

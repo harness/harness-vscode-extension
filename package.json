@@ -247,13 +247,6 @@
             ],
             "default": "info",
             "description": "Controls console output verbosity. Use 'debug' for troubleshooting, 'info' for normal operation, 'error' for production."
-          },
-          "harness.claudeCliTimeoutSeconds": {
-            "type": "number",
-            "default": 90,
-            "minimum": 30,
-            "maximum": 600,
-            "description": "Timeout for Claude Code CLI commands in seconds. Increase for complex queries requiring many API calls."
           }
         }
       },
@@ -274,6 +267,46 @@
             "order": 2,
             "scope": "machine",
             "markdownDescription": "Absolute path to a PEM file with extra certificate authorities, for private or TLS-inspecting proxies. For example `/etc/ssl/certs/corp-ca.pem`.\n\nThe certificates in this file are added to the Node.js and operating system root certificates, which are always trusted. Feature-flag traffic picks up changes after **Developer: Reload Window**."
+          }
+        }
+      },
+      {
+        "title": "AI Tools",
+        "order": 3,
+        "properties": {
+          "harness.ai.preferredExternalTool": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "claudecode-cli",
+              "claudecode-ext",
+              "cursor",
+              "copilot",
+              "kiro"
+            ],
+            "enumDescriptions": [
+              "Use the first detected tool",
+              "Claude Code CLI in the integrated terminal",
+              "Claude Code extension",
+              "Cursor",
+              "GitHub Copilot",
+              "Kiro"
+            ],
+            "default": "auto",
+            "description": "Which external AI tool to use when the destination is External. Harness AI is selected with Default Destination. The sidebar picker writes this setting."
+          },
+          "harness.ai.defaultDestination": {
+            "type": "string",
+            "enum": [
+              "harness",
+              "external"
+            ],
+            "enumDescriptions": [
+              "Ask Harness AI in the extension",
+              "Send to the selected external tool"
+            ],
+            "default": "harness",
+            "description": "Where the sidebar composer sends a question. Harness sends to Harness AI. External sends to the preferred external tool."
           }
         }
       }

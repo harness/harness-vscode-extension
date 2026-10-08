@@ -1,10 +1,8 @@
-// AI tool launcher - spawns Claude Code CLI or opens Extension
+// AI tool launcher - opens Claude Code in the terminal, or an editor AI panel
 
-import { spawn } from 'child_process';
 import * as vscode from 'vscode';
-import * as os from 'os';
 import { logger } from '../utils/logger';
-import type { HarnessConfig } from '../config/configManager';
+import { launchClaudeInTerminal } from './claudeTerminalLauncher';
 
 export interface LaunchResult {
   type: 'response' | 'launched' | 'error';
@@ -17,9 +15,7 @@ export interface LaunchResult {
 interface LaunchOptions {
   prompt: string;
   toolId: 'claudecode-cli' | 'claudecode-ext' | 'cursor' | 'copilot' | 'kiro';
-  config?: HarnessConfig; // Required for CLI timeout setting
-  cwd?: string; // working directory for CLI execution
-  mcpConfigPath?: string;   // NEW — explicit MCP file to load
+  cwd?: string; // working directory for the Claude terminal
 }
 
 /**
@@ -27,9 +23,7 @@ interface LaunchOptions {
  */
 export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
   if (options.toolId === 'claudecode-cli') {
-    // Get timeout from config (in seconds), convert to milliseconds
-    const timeoutMs = options.config ? options.config.claudeCliTimeoutSeconds * 1000 : 90000;
-    return launchCLI(options.prompt, timeoutMs, options.cwd, options.mcpConfigPath);
+    return launchClaudeInTerminal(options.prompt, options.cwd);
   } else if (options.toolId === 'claudecode-ext') {
     return launchExtension(options.prompt);
   } else if (options.toolId === 'cursor') {
@@ -44,108 +38,6 @@ export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
       error: `Unknown tool: ${options.toolId}`,
     };
   }
-}
-
-/**
- * Launch Claude Code CLI subprocess
- * Runs: claude "<prompt>" --output-format json
- */
-async function launchCLI(prompt: string, timeout: number, cwd?: string, mcpConfigPath?: string): Promise<LaunchResult> {
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    let output = '';
-    let errorOutput = '';
-
-    // Spawn claude CLI process
-    // Use --bare mode to skip all automatic context loading (hooks, LSP, CLAUDE.md, local files)
-    // Use --permission-mode bypassPermissions so MCP servers don't require interactive approval
-    // Explicitly load MCP config (project or global scope)
-    // Run from a temp directory to avoid any directory-based context
-    const runDir = os.tmpdir();
-    const claudeConfigPath = mcpConfigPath ?? `${os.homedir()}/.claude.json`;
-    const proc = spawn('claude', [
-      prompt,
-      '--output-format', 'json',
-      '--permission-mode', 'bypassPermissions',
-      '--bare',  // Skip hooks, LSP, plugin sync, auto-memory, CLAUDE.md discovery
-      '--mcp-config', claudeConfigPath,  // Explicitly load MCP servers from specified path
-    ], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout,
-      cwd: runDir,
-      env: {
-        ...process.env,
-        CLAUDE_CODE_SIMPLE: '1',  // Reinforces bare mode
-      },
-    });
-
-    // Collect stdout
-    proc.stdout?.on('data', (data: Buffer) => {
-      output += data.toString();
-    });
-
-    // Collect stderr
-    proc.stderr?.on('data', (data: Buffer) => {
-      errorOutput += data.toString();
-    });
-
-    // Handle timeout
-    const timeoutId = setTimeout(() => {
-      proc.kill('SIGTERM');
-      resolve({
-        type: 'error',
-        error: `Request timed out after ${timeout / 1000} seconds`,
-      });
-    }, timeout);
-
-    // Handle process completion
-    proc.on('close', (code) => {
-      clearTimeout(timeoutId);
-      const durationMs = Date.now() - startTime;
-
-      if (code !== 0) {
-        resolve({
-          type: 'error',
-          error: errorOutput || `Process exited with code ${code}`,
-          durationMs,
-        });
-        return;
-      }
-
-      // Parse JSON output
-      try {
-        const result = JSON.parse(output);
-
-        // Extract response content from Claude CLI JSON format
-        // Claude CLI returns: { type: "result", result: "actual content here", ... }
-        const content = result.result || result.content || result.message || output;
-        const toolCalls = extractToolCalls(result);
-
-        resolve({
-          type: 'response',
-          content: typeof content === 'string' ? content : JSON.stringify(content, null, 2),
-          toolCalls,
-          durationMs,
-        });
-      } catch (error) {
-        // Fallback to raw output if JSON parsing fails
-        resolve({
-          type: 'response',
-          content: output || 'No response received',
-          durationMs,
-        });
-      }
-    });
-
-    // Handle process errors
-    proc.on('error', (error) => {
-      clearTimeout(timeoutId);
-      resolve({
-        type: 'error',
-        error: `Failed to launch Claude CLI: ${error.message}`,
-      });
-    });
-  });
 }
 
 /**
@@ -280,54 +172,6 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
       error: error instanceof Error ? error.message : 'Failed to launch extension',
     };
   }
-}
-
-/**
- * Extract tool calls from Claude CLI JSON response
- * CLI returns structure like: { content: "...", tool_use: [...] }
- */
-function extractToolCalls(result: unknown): Array<{ name: string; args?: unknown }> | undefined {
-  if (!result || typeof result !== 'object') {
-    return undefined;
-  }
-
-  const obj = result as Record<string, unknown>;
-
-  // Check for tool_use array
-  if (Array.isArray(obj.tool_use)) {
-    return obj.tool_use.map((tool: unknown) => {
-      if (tool && typeof tool === 'object') {
-        const t = tool as Record<string, unknown>;
-        return {
-          name: typeof t.name === 'string' ? t.name : 'unknown',
-          args: t.input,
-        };
-      }
-      return { name: 'unknown' };
-    });
-  }
-
-  // Check for content blocks with tool_use type
-  if (Array.isArray(obj.content)) {
-    const toolUseBlocks = obj.content.filter(
-      (block: unknown) =>
-        block &&
-        typeof block === 'object' &&
-        (block as Record<string, unknown>).type === 'tool_use'
-    );
-
-    if (toolUseBlocks.length > 0) {
-      return toolUseBlocks.map((block: unknown) => {
-        const b = block as Record<string, unknown>;
-        return {
-          name: typeof b.name === 'string' ? b.name : 'unknown',
-          args: b.input,
-        };
-      });
-    }
-  }
-
-  return undefined;
 }
 
 /**

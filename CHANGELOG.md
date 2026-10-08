@@ -9,9 +9,15 @@
 - **Proxy support**: All extension traffic (Harness API and FME feature flags) honors the new `harness.proxy` setting, falling back to `HTTPS_PROXY`/`HTTP_PROXY` (`NO_PROXY` applies to Harness API traffic when the proxy comes from the environment) ([#20](https://github.com/harness/harness-vscode-extension/issues/20))
 - **Custom CA certificates**: New `harness.caBundle` setting, plus automatic trust of the OS certificate store where supported, for private or TLS-inspecting proxies
 - **Admin control for Harness AI**: The project-level `aida` setting in Harness (Settings API) can now turn off **Ask Harness AI**. When disabled — or when the setting cannot be read — the sidebar shows "Harness AI is disabled. Contact your administrator." and falls back to any installed external tool (Claude Code, Cursor, Copilot, Kiro). The extension keeps retrying in the background until it gets an answer. A reusable `getSetting` / `getBooleanSetting` helper in `src/api/settingsService.ts` reads any Harness setting
+- **AI Tools settings**: `harness.ai.preferredExternalTool` selects the external AI destination, while `harness.ai.defaultDestination` selects Harness AI or the preferred external tool. Existing sidebar choices migrate automatically
 
 ### Changed
 - **External AI composer no longer requires detected MCP to send**: The Send button is enabled when the MCP config is not detected (it may be configured another way); the "Configure MCP" link stays visible
+- **Claude Code CLI opens in the integrated terminal**: Send starts a new interactive Claude terminal with the Harness execution URL and question in a structured, shell-safe prompt. Claude uses its normal MCP discovery, and the conversation continues in the terminal instead of returning one response in the sidebar
+- **Non-blocking Claude detection**: Startup uses a cached asynchronous PATH lookup instead of blocking on `which` and `claude --version`; availability is checked again when Send is clicked
+
+### Fixed
+- **Harness AI availability no longer flashes the wrong destination**: The footer stays neutral while the admin permission check is in progress, then renders Harness AI or the external composer only after the API result is known
 
 ## [0.1.9] - 2026-08-03
 

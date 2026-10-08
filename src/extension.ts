@@ -23,14 +23,11 @@ import { openAidaChatPanel, registerAidaChatPanelSerializer, updateActiveChatCon
 import { AidaAvailability } from './ai/aidaAvailability';
 import { detectAITools } from './ai/detector';
 import { configureMCP, configureCopilotMCP, configureKiroMCP } from './ai/mcpConfigurer';
-import { buildPrompt } from './ai/promptBuilder';
+import { buildClaudeTerminalPrompt, buildPrompt } from './ai/promptBuilder';
 import { launchAI } from './ai/launcher';
+import { migrateAiSettings, readAiDestination, readPreferredExternalToolId, setAiDestination, setPreferredExternalTool } from './ai/aiSettings';
 import { logger } from './utils/logger';
 import { configureProxy, registerProxyConfigWatcher } from './utils/proxy';
-
-// Global state key for AI tool preference
-const AI_TOOL_PREFERENCE_KEY = 'harness.aiToolPreference';
-const AI_DESTINATION_KEY = 'harness.aiDestination';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const secretStore    = new SecretStore(context.secrets);
@@ -83,22 +80,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return cfg ? aida.refresh(cfg) : true;
   });
 
-  // Helper to get/set AI tool preference
-  const getAIToolPreference = (): string | undefined => {
-    return context.globalState.get<string>(AI_TOOL_PREFERENCE_KEY);
-  };
-  const setAIToolPreference = async (toolId: string): Promise<void> => {
-    await context.globalState.update(AI_TOOL_PREFERENCE_KEY, toolId);
-  };
+  // External tool preference and footer destination live in settings (Harness › AI Tools).
+  const getAIToolPreference = (): string | undefined => readPreferredExternalToolId();
+  const getAIDestination = (): 'harness' | 'external' => readAiDestination();
 
-  // AI footer destination (native "harness" launcher vs external tool) —
-  // persisted so the user's last choice survives IDE restarts.
-  const getAIDestination = (): 'harness' | 'external' => {
-    return context.globalState.get<'harness' | 'external'>(AI_DESTINATION_KEY, 'harness');
-  };
-  const setAIDestination = async (dest: 'harness' | 'external'): Promise<void> => {
-    await context.globalState.update(AI_DESTINATION_KEY, dest);
-  };
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+    if (!event.affectsConfiguration('harness.ai')) return;
+    detectAITools(getAIToolPreference()).then(detection => {
+      bridge.send({
+        type: 'STATE_UPDATE',
+        aiDetection: detection,
+        aiDestination: getAIDestination(),
+      });
+    }).catch(err => {
+      logger.error('AI', 'Detection failed after settings change:', err);
+    });
+  }));
 
   // ── Log Content Provider (for editor tab logs) ────
   const logProvider = new LogContentProvider();
@@ -470,12 +467,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           };
         }
 
-        const prompt = buildPrompt(aiMsg.question, executionContext);
-
-        // Debug: Log the actual prompt being sent
-        logger.debug('AI', 'Generated prompt:', prompt);
-        logger.debug('AI', 'Execution context:', executionContext);
-
         // Detect which tool to use (with user preference)
         const detection = await detectAITools(getAIToolPreference());
         if (!detection.activeTool) {
@@ -486,6 +477,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           return;
         }
 
+        const prompt = detection.activeTool === 'claudecode-cli'
+          ? buildClaudeTerminalPrompt(aiMsg.question, executionContext)
+          : buildPrompt(aiMsg.question, executionContext);
+
+        // Debug: Log the actual prompt being sent
+        logger.debug('AI', 'Generated prompt:', prompt);
+        logger.debug('AI', 'Execution context:', executionContext);
+
         // Cursor-specific handling - simplified for compatibility
         const tool = detection.tools.find(t => t.id === detection.activeTool);
         if (tool && tool.id === 'cursor') {
@@ -494,18 +493,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           // Don't check cursorMcpMode or cursorOAuthReady - let Cursor handle it
         }
 
-        // Launch AI tool
-        // Pass workspace folder so CLI uses project-specific MCP config
+        // Workspace folder is the Claude terminal cwd, so Claude discovers project MCP config on startup.
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const mcpConfigPath = detection.mcpScope.activeScope === 'project' && detection.mcpScope.project
-          ? detection.mcpScope.project.path
-          : detection.mcpScope.global.path;
         const result = await launchAI({
           prompt,
           toolId: detection.activeTool as any,
-          config: currentConfig || undefined,
           cwd: workspaceFolder,
-          mcpConfigPath,
         });
 
         if (result.type === 'response') {
@@ -658,7 +651,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // Persist the AI footer destination (e.g. user switched back to Harness AI).
       const aiMsg = m as { type: 'AI_SET_DESTINATION'; destination: 'harness' | 'external' };
       if (aiMsg.destination === 'harness' || aiMsg.destination === 'external') {
-        await setAIDestination(aiMsg.destination);
+        await setAiDestination(aiMsg.destination);
       }
     } else if (m.type === 'AI_SWITCH_TOOL') {
       // Switch active AI tool
@@ -668,8 +661,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       logger.debug('AI', 'Switching to tool:', aiMsg.toolId);
 
       // Save preference (tool + destination: picking a tool opts into external)
-      await setAIToolPreference(aiMsg.toolId);
-      await setAIDestination('external');
+      await setPreferredExternalTool(aiMsg.toolId);
+      await setAiDestination('external');
 
       // Re-detect with new preference
       const detection = await detectAITools(aiMsg.toolId);
@@ -1256,9 +1249,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   // ── AI Tool Detection (non-blocking) ──────────────
-  // Detect Claude Code CLI/Extension and check MCP readiness
-  // Runs in background, won't block extension activation
-  detectAITools(getAIToolPreference()).then(detection => {
+  // Detect Claude Code CLI/Extension and check MCP readiness.
+  // Settings migration and PATH lookup stay off the activation path.
+  migrateAiSettings(context).catch(err => {
+    logger.error('AI', 'Failed to migrate AI settings:', err);
+  }).then(() => detectAITools(getAIToolPreference())).then(detection => {
     logger.debug('AI', 'Detection complete:', { tools: detection.tools.map(t => `${t.id} (MCP: ${t.mcpReady})`).join(', '), activeTool: detection.activeTool });
     bridge.send({
       type: 'STATE_UPDATE',

@@ -10,7 +10,6 @@ export interface HarnessConfig {
   projectIdentifier: string;
   pollingIntervalSeconds: number;
   diffAwareSTO: boolean;
-  claudeCliTimeoutSeconds: number;
   apiKey: string;
 }
 
@@ -88,7 +87,6 @@ export class ConfigManager {
       projectIdentifier,
       pollingIntervalSeconds:   cfg.get<number>('pollingIntervalSeconds', 10),
       diffAwareSTO:             cfg.get<boolean>('diffAwareSTO', true),
-      claudeCliTimeoutSeconds:  cfg.get<number>('claudeCliTimeoutSeconds', 90),
       apiKey,
     };
   }
