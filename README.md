@@ -258,6 +258,9 @@ Your Personal Access Token is stored securely in VS Code's secret storage.
 - `harness.pollingIntervalSeconds` — How often to check for updates (default: 10s, min: 5s, max: 120s)
 - `harness.proxy` — HTTP(S) proxy URL (`http://` or `https://`); falls back to the `HTTPS_PROXY`/`HTTP_PROXY` environment variables (user settings only). `NO_PROXY` is honored only when the proxy comes from environment variables, and not for feature-flag traffic. VS Code's own `http.proxy`/`http.proxySupport` settings also apply and may take precedence on recent VS Code versions. Feature-flag traffic picks up proxy changes after **Developer: Reload Window**; environment variable changes require restarting VS Code.
 - `harness.caBundle` — PEM CA bundle path for private or TLS-inspecting proxy certificate authorities (user settings only)
+
+> **Proxy scope:** Proxy and CA configuration installs a process-wide Node.js network dispatcher. It can therefore affect `fetch` requests made by other extensions sharing the same extension host, not only Harness requests.
+
 - `harness.defaultView` — Which view opens by default (`pipelines` or `executions`)
 - `harness.diffAwareSTO` — Limit STO annotations to files changed in current diff (default: true)
 - `harness.logLevel` — Console verbosity: `off`, `error`, `warn`, `info` (default), `debug`

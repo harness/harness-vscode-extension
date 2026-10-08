@@ -455,6 +455,11 @@ GET /ng/api/settings/aida?accountIdentifier=…&orgIdentifier=…&projectIdentif
 - `harness.defaultView` — Default view (`pipelines` or `executions`)
 - `harness.logLevel` — Console verbosity (`off`/`error`/`warn`/`info`/`debug`)
 
+**Proxy Settings:**
+- `harness.proxy` — HTTP(S) proxy; falls back to `HTTPS_PROXY`/`HTTP_PROXY`
+- `harness.caBundle` — Additional trusted CA bundle
+- `configureProxy()` uses Undici's `setGlobalDispatcher()`. The dispatcher is process-wide, so these settings can affect `fetch` calls from other extensions in the same extension host. A later global dispatcher installed by another extension can also replace it.
+
 **AI Tools:**
 - `harness.ai.preferredExternalTool` — External tool used when the destination is External (`auto`, `claudecode-cli`, `claudecode-ext`, `cursor`, `copilot`, `kiro`). Harness AI is chosen with `harness.ai.defaultDestination`. The sidebar picker writes this setting.
 - `harness.ai.defaultDestination` — `harness` or `external`
