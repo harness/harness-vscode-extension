@@ -131,13 +131,15 @@
       "editor/title": [
         {
           "command": "harness.openIntelligenceChat",
-          "group": "navigation@1"
+          "group": "navigation@1",
+          "when": "harness.aidaEnabled"
         }
       ],
       "modalEditor/editorTitle": [
         {
           "command": "harness.openIntelligenceChat",
-          "group": "navigation@1"
+          "group": "navigation@1",
+          "when": "harness.aidaEnabled"
         }
       ]
     },

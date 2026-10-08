@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './auth/secretStore';
 import { runOnboardingIfNeeded, runOnboarding, runWorkspaceSetup, runWorkspaceOverride, runEnvVarOnboarding } from './auth/onboarding';
-import { ConfigManager } from './config/configManager';
+import { ConfigManager, HarnessConfig } from './config/configManager';
 import { readEnvCredentials } from './auth/envCredentials';
 import { HarnessClient } from './api/harnessClient';
 import { PipelinePoller } from './pipeline/pipelinePoller';
@@ -20,6 +20,7 @@ import { LogContentProvider, LOG_SCHEME } from './logs/logContentProvider';
 import { openLogAsEditorTab } from './logs/logEditorTab';
 import { openAgentChatTab, isAgentLog } from './logs/agentChatTab';
 import { openAidaChatPanel, registerAidaChatPanelSerializer, updateActiveChatContext, updateActiveChatTheme, type IntelligenceChatContext } from './ai/aidaChatPanel';
+import { AidaAvailability } from './ai/aidaAvailability';
 import { detectAITools } from './ai/detector';
 import { configureMCP, configureCopilotMCP, configureKiroMCP } from './ai/mcpConfigurer';
 import { buildPrompt } from './ai/promptBuilder';
@@ -48,7 +49,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(diagnostics, statusBar, outputChannel);
 
-  registerAidaChatPanelSerializer(context, configManager);
+  // ── Harness AI admin gate ─────────────────────────
+  // The `aida` project setting lets an admin turn off the native "Ask Harness AI"
+  // chat. External tools (Claude Code, Cursor, Copilot, Kiro) are unaffected.
+  // Fails closed: only an explicit "true" enables it; lookups retry in the background.
+  const AIDA_DISABLED_MESSAGE = 'Harness AI is disabled. Contact your administrator.';
+  const setAidaContext = (enabled: boolean) =>
+    vscode.commands.executeCommand('setContext', 'harness.aidaEnabled', enabled);
+  void setAidaContext(false);
+  const aida = new AidaAvailability(status => {
+    logger.info('Extension', `Harness AI status: ${status}`);
+    void setAidaContext(status === 'enabled');
+    bridge.send({ type: 'AIDA_STATUS', status });
+  });
+  context.subscriptions.push({ dispose: () => aida.dispose() });
+
+  /**
+   * Fresh admin check right before opening the chat. Returns true when the chat may
+   * open. Shows the administrator notice otherwise. No config → defer to the
+   * caller's existing "configure Harness first" handling.
+   */
+  const ensureAidaEnabled = async (cfg: HarnessConfig | null): Promise<boolean> => {
+    if (!cfg) return true;
+    const enabled = await aida.refresh(cfg);
+    if (!enabled) {
+      vscode.window.showWarningMessage(AIDA_DISABLED_MESSAGE);
+    }
+    return enabled;
+  };
+
+  registerAidaChatPanelSerializer(context, configManager, async () => {
+    const cfg = await configManager.getConfig();
+    return cfg ? aida.refresh(cfg) : true;
+  });
 
   // Helper to get/set AI tool preference
   const getAIToolPreference = (): string | undefined => {
@@ -177,6 +210,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     currentConfig = config;
     currentClient = new HarnessClient(config);
+
+    // Look up the admin `aida` setting in the background (not awaited — never delays startup).
+    aida.start(config);
 
     // Send GIT_CONTEXT to webview so it knows org/project and can render configured state
     const cfg = vscode.workspace.getConfiguration('harness');
@@ -506,6 +542,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
         return;
       }
+      if (!(await ensureAidaEnabled(cfg))) return;
       let chatContext: import('./ai/aidaChatPanel').IntelligenceChatContext | undefined;
       if (currentViewedExecution?.execution) {
         const ex = currentViewedExecution.execution;
@@ -695,6 +732,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (poller) {
       poller.refresh();
     }
+    // Re-sync the admin gate: the sidebar webview may have been recreated since the last change.
+    bridge.send({ type: 'AIDA_STATUS', status: aida.getStatus() });
   });
 
   // Listen for VS Code theme changes and notify webview
@@ -1125,6 +1164,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.executeCommand('harness.configureApiKey');
         return;
       }
+      if (!(await ensureAidaEnabled(cfg))) return;
 
       // Build context from currently viewed execution (if any)
       let chatContext: import('./ai/aidaChatPanel').IntelligenceChatContext | undefined;

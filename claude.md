@@ -31,6 +31,8 @@ A VS Code sidebar extension that surfaces Harness pipeline execution (CI, CD, ST
 | `src/api/abortService.ts` | Aborts a running execution via interrupt API (`AbortAll` / `UserMarkedFailure`) |
 | `src/api/stoScan.ts` | Parses STO scanner vulnerability counts from the execution graph (no API call) |
 | `src/api/userService.ts` | Fetches current user + checks group membership |
+| `src/api/settingsService.ts` | Reusable Harness Settings API reader (`getSetting`, `fetchBooleanSetting`, `getBooleanSetting`); 5s timeout, errors → `null`/`false` |
+| `src/ai/aidaAvailability.ts` | Admin gate for native Harness AI (`aida` setting): fail-closed, background retry with backoff, `AIDA_STATUS` to webview |
 | `src/pipeline/pipelinePoller.ts` | Polls for pipeline execution updates; pauses when sidebar hidden/window unfocused |
 | `src/pipeline/executionDispatcher.ts` | Fan-out to CI/CD/STO/TI/SSCA/OPA/CCM/AIDA/Approval modules |
 | `src/ui/sidebarProvider.ts` | `WebviewViewProvider` — injects HTML, tracks visibility |
@@ -39,9 +41,9 @@ A VS Code sidebar extension that surfaces Harness pipeline execution (CI, CD, ST
 | `src/ui/webview/styles.css` | Dual-theme styles (simple + enhanced OKLCH) |
 | `src/fme/fmeClient.ts` | Harness Feature Management Engine (FME) client using Split.io SDK |
 | `src/logs/logEditorTab.ts` | Opens step logs in editor tabs with syntax highlighting |
-| `src/ai/detector.ts` | Detects Claude Code CLI/Extension/Cursor and checks MCP configuration |
-| `src/ai/mcpConfigurer.ts` | Writes Harness MCP server config to `~/.claude.json` |
-| `src/ai/launcher.ts` | Launches Claude Code CLI/Extension or Cursor with prompts |
+| `src/ai/detector.ts` | Detects Claude Code CLI/Extension/Cursor/Copilot/Kiro and checks MCP configuration |
+| `src/ai/mcpConfigurer.ts` | Writes Harness MCP server config to `~/.claude.json`, Cursor, Copilot, and Kiro MCP configs |
+| `src/ai/launcher.ts` | Launches Claude Code CLI/Extension, Cursor, Copilot, or Kiro with prompts |
 | `src/ai/aidaChatPanel.ts` | Harness AI Chat panel — SSE streaming, markdown, history cards, session title header, split input + MCP pill, elicitation cards, pipeline-context chip, ⌘⇧H focus |
 
 ---
@@ -243,7 +245,7 @@ A single action button on each execution card swaps based on status:
 
 ## AI Integration
 
-Supports **Claude Code** (CLI/Extension), **Cursor AI**, and **GitHub Copilot** with automatic context injection via MCP.
+Supports **Claude Code** (CLI/Extension), **Cursor AI**, **GitHub Copilot**, and **Kiro** with automatic context injection via MCP.
 
 ### Claude Code
 - **CLI mode**: Fully automated (spawns subprocess, response in sidebar)
@@ -261,6 +263,12 @@ Supports **Claude Code** (CLI/Extension), **Cursor AI**, and **GitHub Copilot** 
 - Uses `"servers"` key in MCP config (Copilot-specific format)
 - Environment variable inheritance: When using env var auth, only org/project IDs in config (credentials inherited from VS Code process)
 
+### Kiro
+- Auto-detected when running in Kiro IDE (`vscode.env.appName === 'Kiro'`)
+- Opens Kiro AI Chat via `workbench.action.chat.*` commands and auto-pastes prompt
+- Full MCP support with standard `mcpServers` format
+- MCP config via "Kiro: Open user/workspace MCP config (JSON)" commands
+
 **MCP Configuration:**
 - **Claude Code**: `~/.claude.json` (global) or `<workspace>/.mcp.json` (project)
 - **Cursor**: 
@@ -271,6 +279,9 @@ Supports **Claude Code** (CLI/Extension), **Cursor AI**, and **GitHub Copilot** 
   - Global (macOS): `~/Library/Application Support/Code/User/mcp.json`
   - Global (Windows): `%APPDATA%\Code\User\mcp.json`
   - Global (Linux): `~/.config/Code/User/mcp.json`
+- **Kiro**:
+  - Global: `~/.kiro/settings/mcp.json` (macOS/Linux) or `%APPDATA%\Kiro\settings\mcp.json` (Windows)
+  - Project: `.kiro/settings/mcp.json` in workspace root
 - Preserves existing config, only updates Harness MCP fields
 - User must restart AI tool to activate
 - **Auth handling**: When `authSource === 'env'`, writes environment variable references (`${HARNESS_API_KEY}`); when `authSource === 'pat'`, writes actual credentials
@@ -408,6 +419,26 @@ draws them; on submit the webview posts a `system_event`
   - **Default**: ON (enabled by default for fail-safe behavior)
   - **'on'** or **'control'**: Enabled
   - **'off'**: Disabled (only way to turn off AI bar)
+
+---
+
+## Admin Control: Harness AI (`aida` setting)
+
+An admin can turn off **Ask Harness AI** (native chat only) through the Harness Settings API. External tools (Claude Code, Cursor, Copilot, Kiro) are never affected.
+
+```
+GET /ng/api/settings/aida?accountIdentifier=…&orgIdentifier=…&projectIdentifier=…
+ → { status, data: { valueType: "Boolean", value: "true" | "false" } }
+```
+
+- **Fail closed:** only an explicit `"true"` enables it. `"false"`, HTTP error, timeout (5s), or a non-boolean value → disabled.
+- **Background, non-blocking:** `startPoller()` calls `aida.start(config)` without awaiting. On error it retries after 5s, 15s, 30s, then every 60s until a real true/false answer. A new org/project resets to `checking`; other config changes don't flicker the footer.
+- **Fresh check on open:** `harness.openIntelligenceChat`, the webview `OPEN_INTELLIGENCE_CHAT` message, and panel restore after reload call `aida.refresh()`; when it is not `true` the panel stays closed and "Harness AI is disabled. Contact your administrator." is shown.
+- **Host → webview:** `AIDA_STATUS` (`checking` | `enabled` | `disabled`). Re-sent on `WEBVIEW_READY`. Also sets the context key `harness.aidaEnabled` (editor-title button `when` clause).
+- **Sidebar footer:** not enabled → falls back to the external composer (picker shows Harness AI as non-selectable); no external tool → plain notice. The persisted `harness.aiDestination` is not modified. `checking` is neutral (no "disabled" wording).
+- **Reuse:** `getSetting`, `fetchBooleanSetting` (true/false/null) and `getBooleanSetting` in `src/api/settingsService.ts` can read any other Harness setting.
+
+**External composer Send:** enabled when MCP is not detected (`unconfigured`) as long as a tool is detected; still blocked for no tool, detection in progress, Cursor plugin missing, and Cursor OAuth pending (`canSendAI()` in `main.ts`).
 
 ---
 
