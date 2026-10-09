@@ -16,6 +16,7 @@ import { applySSCA, summariseSSCA } from '../features/sscaAnnotations';
 import { getBuildCost } from '../api/ccmService';
 import { parseStoScan } from '../api/stoScan';
 import { canCurrentUserApprove } from '../api/userService';
+import { stageIdFromBaseFqn } from './executionModel';
 import { logger } from '../utils/logger';
 
 export async function dispatchModules(
@@ -189,11 +190,8 @@ export async function dispatchModules(
         const approvers: string[]  = rawUsers.map((u: any) => u.name ?? u.email ?? u).filter(Boolean);
         const minimumCount: number = spec?.approvers?.minimumCount ?? 1;
 
-        // Find which stage contains this approval step by traversing up the baseFqn
-        // Example baseFqn: "pipeline.stages.Deploy_Dev.spec.execution.steps.promotionApproval"
-        const baseFqn = n.baseFqn || '';
-        const stageIdMatch = baseFqn.match(/pipeline\.stages\.([^.]+)/);
-        const stageIdentifier = stageIdMatch ? stageIdMatch[1] : undefined;
+        // Stage id from either legacy `.spec.execution.steps` or v1 `.steps` FQNs.
+        const stageIdentifier = stageIdFromBaseFqn(n.baseFqn);
 
         logger.debug('Harness', 'Approval details:', {
           stageIdentifier,
@@ -233,10 +231,7 @@ export async function dispatchModules(
         const approvalCriteria = spec?.approvalCriteria?.criteriaSpec?.conditions ?? [];
         const rejectionCriteria = spec?.rejectionCriteria?.criteriaSpec?.conditions ?? [];
 
-        // Find which stage contains this approval step
-        const baseFqn = n.baseFqn || '';
-        const stageIdMatch = baseFqn.match(/pipeline\.stages\.([^.]+)/);
-        const stageIdentifier = stageIdMatch ? stageIdMatch[1] : undefined;
+        const stageIdentifier = stageIdFromBaseFqn(n.baseFqn);
 
         // Try to construct Jira URL - this may need connector lookup for the actual Jira instance URL
         // For now, we'll send the issue key and let the webview handle it
@@ -264,10 +259,7 @@ export async function dispatchModules(
         const approvalCriteria = spec?.approvalCriteria?.criteriaSpec?.conditions ?? [];
         const rejectionCriteria = spec?.rejectionCriteria?.criteriaSpec?.conditions ?? [];
 
-        // Find which stage contains this approval step
-        const baseFqn = n.baseFqn || '';
-        const stageIdMatch = baseFqn.match(/pipeline\.stages\.([^.]+)/);
-        const stageIdentifier = stageIdMatch ? stageIdMatch[1] : undefined;
+        const stageIdentifier = stageIdFromBaseFqn(n.baseFqn);
 
         // ServiceNow URL would need connector lookup for the instance URL
         const serviceNowUrl = ticketNumber ? `https://instance.service-now.com/nav_to.do?uri=${ticketType}/${ticketNumber}` : undefined;

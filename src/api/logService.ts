@@ -2,6 +2,7 @@ import * as zlib from 'zlib';
 import { HarnessConfig } from '../config/configManager';
 import { WebviewBridge } from '../ui/webviewBridge';
 import { LayoutNode, ExecutionNode, ExecutionGraph } from './types';
+import { listLayoutStages } from '../pipeline/executionModel';
 import { logger } from '../utils/logger';
 
 const TERMINAL_STATUSES = new Set(['SUCCESS', 'FAILED', 'ABORTED', 'SKIPPED', 'EXPIRED']);
@@ -526,23 +527,26 @@ export function findActiveSteps(
   );
 }
 
-export function findActiveStage(layoutNodeMap: Record<string, LayoutNode>): LayoutNode | null {
+export function findActiveStage(
+  layoutNodeMap: Record<string, LayoutNode>,
+  graph?: ExecutionGraph | null,
+  yamlVersion?: string,
+): LayoutNode | null {
   const active = new Set(['RUNNING', 'ASYNC_WAITING', 'TASK_WAITING']);
-  for (const node of Object.values(layoutNodeMap)) {
-    if (node.nodeGroup === 'STAGE' && active.has((node.status as string).toUpperCase())) {
-      return node;
-    }
+  for (const node of listLayoutStages(layoutNodeMap, graph, yamlVersion)) {
+    if (active.has((node.status as string).toUpperCase())) return node;
   }
   return null;
 }
 
-export function findFailedStage(layoutNodeMap: Record<string, LayoutNode>): LayoutNode | null {
-  for (const node of Object.values(layoutNodeMap)) {
-    if (node.nodeGroup === 'STAGE' && (node.status as string).toUpperCase() === 'FAILED') {
-      return node;
-    }
-  }
-  return null;
+export function findFailedStage(
+  layoutNodeMap: Record<string, LayoutNode>,
+  graph?: ExecutionGraph | null,
+  yamlVersion?: string,
+): LayoutNode | null {
+  return listLayoutStages(layoutNodeMap, graph, yamlVersion).find(
+    node => (node.status as string).toUpperCase() === 'FAILED'
+  ) ?? null;
 }
 
 // ── Live log streaming (active executions) ────────────────────────────────────

@@ -7,6 +7,7 @@ import { getGitContext, getGitApi, executionMatchesSha } from '../git/gitContext
 import { handleApiError } from '../utils/errorHandler';
 import { dispatchModules } from './executionDispatcher';
 import { ExecutionSummary, ExecutionDetail, ExecutionGraph } from '../api/types';
+import { graphStatusHash } from './executionModel';
 import { logger } from '../utils/logger';
 
 const INTERVAL_ACTIVE_MS    = 1_000;   // while pipeline is running or waiting for execution
@@ -17,21 +18,6 @@ const WAITING_TIMEOUT_MS    = 5 * 60 * 1000;
 const TERMINAL_STATUSES = new Set([
   'SUCCESS', 'FAILED', 'ABORTED', 'EXPIRED', 'IGNOREFAILED', 'POLICY_EVALUATION_FAILURE'
 ]);
-
-/**
- * Create a simple hash of execution graph to detect changes
- * Tracks status of all nodes to detect step-level updates
- */
-function hashExecutionGraph(graph: ExecutionGraph | null): string {
-  if (!graph?.nodeMap) return 'empty';
-
-  const nodeStatuses = Object.entries(graph.nodeMap)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, node]) => `${id}:${node.status}`)
-    .join('|');
-
-  return nodeStatuses;
-}
 
 interface ExecutionSummaryResponse {
   data?: { content?: ExecutionSummary[] };
@@ -271,7 +257,7 @@ export class PipelinePoller implements vscode.Disposable {
             detailExec.status = currentStatus;
             const isTerminal = TERMINAL_STATUSES.has(currentStatus);
             const harnessUrl = this.buildExecutionUrl(detailExec);
-            const currentGraphHash = hashExecutionGraph(detailGraph ?? null);
+            const currentGraphHash = graphStatusHash(detailGraph ?? null);
 
             // Send update if status OR graph changed (to catch step-level updates)
             if (currentStatus !== this.detailLastStatus || currentGraphHash !== this.detailLastGraphHash) {
@@ -438,7 +424,7 @@ export class PipelinePoller implements vscode.Disposable {
         });
 
         const harnessUrl = this.buildExecutionUrl(execDetail);
-        const currentGraphHash = hashExecutionGraph(execGraph ?? null);
+        const currentGraphHash = graphStatusHash(execGraph ?? null);
 
         // Send update if status OR graph changed (to catch step-level updates)
         if (currentStatus !== this.lastStatus || currentGraphHash !== this.lastGraphHash) {

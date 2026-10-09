@@ -1,4 +1,6 @@
 // Webview renderer — browser context only, no vscode.* APIs
+import { listLayoutStages, stepsForStage } from '../../pipeline/executionModel';
+
 interface VsCodeApi { postMessage(msg: unknown): void; }
 declare function acquireVsCodeApi(): VsCodeApi;
 const vscode = acquireVsCodeApi();
@@ -51,10 +53,9 @@ function getStateFingerprint(): string {
     // Add active stage ID (changes when execution progresses to next stage)
     parts.push(`activeStage:${ex.activeStageId || ''}`);
 
-    // Add stage statuses from layoutNodeMap (detects stage status changes)
-    const stageStatuses = Object.entries(ex.layoutNodeMap)
-      .filter(([, node]) => node.nodeGroup === 'STAGE')
-      .map(([id, node]) => `${id}:${node.status}`)
+    // Real stages only. v1 also stores steps in layoutNodeMap as nodeGroup STAGE.
+    const stageStatuses = listLayoutStages(ex.layoutNodeMap, ex.executionGraph, ex.yamlVersion)
+      .map(node => `${node.nodeUuid}:${node.status}:${node.startTs || 0}`)
       .sort()
       .join(',');
     parts.push(`stages:${stageStatuses}`);
@@ -207,25 +208,23 @@ interface GraphNode {
   uuid?: string;
   name: string;
   identifier?: string;   // YAML step ID — the actual step name (e.g., "OWASP_1", "ShellScript_2")
+  baseFqn?: string;
   status: string;
   stepType?: string;
-  startTs?: number;
-  endTs?: number;
+  startTs?: number | null;
+  endTs?: number | null;
   logBaseKey?: string;
   failureInfo?: { message?: string };
   unitProgresses?: UnitProgress[];
-}
-
-interface StepInfo {
-  name: string;
-  status: string;
-  startTs?: number;
-  endTs?: number;
-  nodeId?: string;       // graph node key — used to correlate LOG_CHUNK messages
-  logBaseKey?: string;   // passed to log-service to fetch logs
-  stepType?: string;     // step type (e.g., HarnessApproval, JiraApproval, ServiceNowApproval)
-  identifier?: string;   // YAML step identifier — used to detect agent steps
-  parentGroupName?: string; // name of the enclosing STEP_GROUP, if any
+  executableResponses?: Array<{
+    task?: { logKeys?: string[] };
+    taskChain?: { logKeys?: string[] };
+    async?: { logKeys?: string[] };
+    asyncChain?: { logKeys?: string[] };
+    sync?: { logKeys?: string[] };
+    child?: { logKeys?: string[] };
+    children?: { logKeys?: string[] };
+  }>;
 }
 
 interface ExecGraph {
@@ -263,6 +262,7 @@ interface ExecState {
     triggerType?: string;
     triggeredBy?: { triggerIdentifier?: string; identifier?: string; email?: string };
   };
+  yamlVersion?: string;
   layoutNodeMap: Record<string, LayoutNode>;
   executionGraph?: ExecGraph | null;
   isTerminal: boolean;
@@ -660,6 +660,7 @@ window.addEventListener('message', ({ data: msg }) => {
         endTs:             ex.endTs,
         moduleInfo:        ex.moduleInfo,
         executionTriggerInfo: (ex as any).executionTriggerInfo ?? prev?.executionTriggerInfo,
+        yamlVersion:       (ex as { yamlVersion?: string }).yamlVersion ?? prev?.yamlVersion,
         layoutNodeMap,
         executionGraph,
         isTerminal,
@@ -935,6 +936,7 @@ window.addEventListener('message', ({ data: msg }) => {
         endTs:             ex.endTs,
         moduleInfo:        ex.moduleInfo,
         executionTriggerInfo,
+        yamlVersion:       (ex as { yamlVersion?: string }).yamlVersion ?? prev?.yamlVersion,
         layoutNodeMap,
         executionGraph,
         isTerminal,
@@ -1229,85 +1231,8 @@ function dotClass(s: string, endTs?: number): string {
   }
 }
 
-function getStages(layoutNodeMap: Record<string, LayoutNode>): LayoutNode[] {
-  // Get all STAGE nodes - include looped iterations but filter STRATEGY containers
-  // STRATEGY nodeGroup indicates loop/matrix wrappers, not actual executable stages
-  const allEntries = Object.entries(layoutNodeMap).filter(([, n]) =>
-    n.nodeGroup === 'STAGE'
-  );
-  if (!allEntries.length) return [];
-
-  // Helper to check if stage should be excluded from output
-  const shouldExclude = (s: LayoutNode): boolean => {
-    // Skip parallel wrapper nodes (they're containers, not actual stages)
-    if (s.nodeType === 'parallel') return true;
-
-    // Check for rollback indicators
-    const isRollback = s.stepType === 'PIPELINE_ROLLBACK' ||
-                       s.stepType === 'STAGE_ROLLBACK' ||
-                       s.nodeType === 'PIPELINE_ROLLBACK' ||
-                       s.nodeType === 'STAGE_ROLLBACK' ||
-                       s.name?.toLowerCase().includes('rollback');
-
-    // Skip untriggered rollback stages
-    if (isRollback) {
-      const notExecuted = !s.startTs || s.status === 'NOT_STARTED' || s.status === 'SKIPPED';
-      return notExecuted;
-    }
-
-    return false;
-  };
-
-  // Map by execution ID (unique even for looped stages) AND by nodeUuid (for nextIds lookup)
-  const byExecutionId = new Map(allEntries);
-  const byUuid = new Map<string, Array<[string, LayoutNode]>>();
-  for (const [execId, stage] of allEntries) {
-    if (!byUuid.has(stage.nodeUuid)) byUuid.set(stage.nodeUuid, []);
-    byUuid.get(stage.nodeUuid)!.push([execId, stage]);
-  }
-
-  // Find roots - stages not referenced by any other stage's nextIds
-  const referenced = new Set(allEntries.flatMap(([, s]) => s.edgeLayoutList?.nextIds ?? []));
-  let roots = allEntries.filter(([execId]) => !referenced.has(execId));
-  if (!roots.length) roots = [allEntries[0]];
-
-  const ordered: LayoutNode[] = [];
-  const visited = new Set<string>();
-  const queue = roots.map(([execId]) => execId);
-
-  while (queue.length) {
-    const execId = queue.shift()!;
-    if (visited.has(execId)) continue;
-    visited.add(execId);
-
-    const stage = byExecutionId.get(execId);
-    if (!stage) continue;
-
-    // Add to output only if not excluded
-    if (!shouldExclude(stage)) {
-      ordered.push(stage);
-    }
-
-    // Follow nextIds to continue traversal
-    for (const nextId of stage.edgeLayoutList?.nextIds ?? []) {
-      if (!visited.has(nextId)) queue.push(nextId);
-    }
-  }
-
-  // Append any stages not reachable via chain (handles looped stages with shared nodeUuid)
-  for (const [execId, stage] of allEntries) {
-    if (!visited.has(execId) && !shouldExclude(stage)) {
-      ordered.push(stage);
-    }
-  }
-
-  // Sort by start time to ensure correct execution order (handles parallel stages correctly)
-  // Stages without startTs (Skipped, NotStarted) sort to the end
-  return ordered.sort((a, b) => {
-    const aTime = a.startTs ?? Number.MAX_SAFE_INTEGER;
-    const bTime = b.startTs ?? Number.MAX_SAFE_INTEGER;
-    return aTime - bTime;
-  });
+function getStages(ex: ExecState): LayoutNode[] {
+  return listLayoutStages(ex.layoutNodeMap, ex.executionGraph, ex.yamlVersion);
 }
 
 function getFailureMessage(ex: ExecState): string | null {
@@ -1369,136 +1294,10 @@ function isStageExpanded(stageId: string): boolean {
   return state.expandedStagesDefault.has(stageId);
 }
 
-// Stage boundary types — these mark the start of a NEW stage; stop traversal here.
-const STAGE_TYPES = new Set([
-  'IntegrationStageStepPMS',  // CI stage
-  'PIPELINE_STAGE',           // generic stage
-  'PIPELINE_ROLLBACK',        // rollback stage
-  'STAGE_ROLLBACK',
-  'DeploymentStageStepPMS',   // CD stage
-  'ApprovalStageStepPMS',     // approval stage (PascalCase)
-  'APPROVAL_STAGE',           // approval stage (SCREAMING_SNAKE_CASE)
-  'CustomStageStepPMS',       // custom stage
-  'IDPStage',                 // IDP stage
-  'CUSTOM_STAGE',             // custom stage (SCREAMING_SNAKE_CASE)
-]);
-
-// Container node types — drill through these, don't surface as steps.
-const CONTAINER_TYPES = new Set([
-  'NG_SECTION', 'NG_SECTION_WITH_ROLLBACK_INFO', 'FORK', 'NG_FORK', 'ROLLBACK_OPTIONAL_CHILD_CHAIN',
-  'PIPELINE', 'PIPELINE_SECTION',
-  'BARRIER', 'QUEUE', 'STRATEGY',
-  'STEP_GROUP', 'CI_STEP_GROUP',
-  'INFRASTRUCTURE_SECTION', 'GITOPS_CLUSTERS', 'SPEC',
-  'STAGES_STEP',       // top-level stages container
-  'NG_EXECUTION',      // execution wrapper inside a stage
-  'liteEngineTask',    // CI k8s/drone wrapper (camelCase from API)
-  'LITEENGINE_TASK',
-]);
-
-function collectSteps(
-  nodeId: string,
-  nodeMap: Record<string, GraphNode>,
-  adjList: Record<string, { children?: string[]; nextIds?: string[] }>,
-  depth: number,
-  visited: Set<string>,
-  parentGroupName?: string
-): StepInfo[] {
-  if (depth > 15 || visited.has(nodeId)) return [];
-  visited.add(nodeId);
-
-  const node = nodeMap[nodeId];
-  if (!node) return [];
-
-  // Stop at stage boundaries — this node belongs to a different stage
-  if (STAGE_TYPES.has(node.stepType ?? '')) return [];
-
-  const adj      = adjList[nodeId] ?? {};
-  const children = [...(adj.children ?? [])];
-  const nextIds  = [...(adj.nextIds ?? [])];
-
-  // Capture step group name to pass into children
-  const isStepGroup = node.stepType === 'STEP_GROUP' || node.stepType === 'CI_STEP_GROUP';
-  const groupNameForChildren = isStepGroup ? (node.name || parentGroupName) : parentGroupName;
-
-  if (!CONTAINER_TYPES.has(node.stepType ?? '') && node.name) {
-    // Leaf step — emit it, then follow sequential chain (but not into other stages)
-    const step: StepInfo = {
-      name: node.name,
-      status: node.status,
-      startTs: node.startTs,
-      endTs: node.endTs,
-      nodeId,
-      logBaseKey: node.logBaseKey,
-      stepType: node.stepType,
-      identifier: node.identifier,
-      parentGroupName,
-    };
-    const rest = nextIds.flatMap(id => collectSteps(id, nodeMap, adjList, depth + 1, visited, parentGroupName));
-    return [step, ...rest];
-  }
-
-  // Container — drill into children and follow next chain
-  const fromChildren = children.flatMap(id => collectSteps(id, nodeMap, adjList, depth + 1, visited, groupNameForChildren));
-  const fromNext     = nextIds.flatMap(id => collectSteps(id, nodeMap, adjList, depth + 1, visited, parentGroupName));
-  return [...fromChildren, ...fromNext];
-}
-
-function getStepsForStage(
-  stage: LayoutNode,
-  layoutNodeMap: Record<string, LayoutNode>,
-  graph?: ExecGraph | null
-): StepInfo[] {
-  // Strategy 1: executionGraph — find stage by UUID then by name
-  if (graph?.nodeMap && graph.nodeAdjacencyListMap) {
-    let stageGraphId: string | undefined;
-
-    // UUID match (most reliable)
-    if (stage.nodeUuid && graph.nodeAdjacencyListMap[stage.nodeUuid]) {
-      stageGraphId = stage.nodeUuid;
-    }
-    // Name match fallback - must match stage-level nodes only (baseFqn pattern: "pipeline.stages.StageName")
-    // Not step-level nodes (baseFqn pattern: "pipeline.stages.StageName.spec.execution.steps.StepName")
-    if (!stageGraphId) {
-      stageGraphId = Object.entries(graph.nodeMap).find(
-        ([, n]) => n.name === stage.name &&
-                   n.baseFqn?.startsWith('pipeline.stages.') &&
-                   !n.baseFqn?.includes('.spec.')
-      )?.[0];
-    }
-
-    if (stageGraphId) {
-      const visited = new Set<string>([stageGraphId]);
-      const adj = graph.nodeAdjacencyListMap[stageGraphId] ?? {};
-      // Only seed from children — nextIds at the stage level points to the NEXT
-      // stage, not steps within this stage. collectSteps follows nextIds internally.
-      const seeds = [...(adj.children ?? [])];
-      const steps = seeds.flatMap(id =>
-        collectSteps(id, graph.nodeMap!, graph.nodeAdjacencyListMap!, 0, visited)
-      );
-      if (steps.length) return steps;
-    }
-  }
-
-  // Strategy 2: layoutNodeMap children (stage's edgeLayoutList)
-  const childIds = stage.edgeLayoutList?.currentNodeChildren ?? [];
-  const layoutSteps = childIds
-    .map(id => layoutNodeMap[id])
-    .filter((n): n is LayoutNode => !!n && n.nodeGroup !== 'STAGE')
-    .map((n): StepInfo => ({ name: n.name, status: n.status, startTs: n.startTs, endTs: n.endTs }));
-  if (layoutSteps.length) return layoutSteps;
-
-  // Strategy 3: all non-STAGE nodes in layoutNodeMap that aren't other stages
-  // (last resort — shows something even if parent-child relationship is missing)
-  const allNonStage = Object.values(layoutNodeMap).filter(
-    n => n.nodeGroup !== 'STAGE' && n.nodeGroup !== undefined && n.name
-  ).map((n): StepInfo => ({ name: n.name, status: n.status, startTs: n.startTs, endTs: n.endTs }));
-  return allNonStage;
-}
 
 // ── Debug panel — shows raw API data to diagnose step/status issues ──────────
 function debugPanel(ex: ExecState): string {
-  const stages = getStages(ex.layoutNodeMap);
+  const stages = getStages(ex);
   const layoutGroups = [...new Set(Object.values(ex.layoutNodeMap).map(n => n.nodeGroup ?? '—'))];
   const graphNodeTypes = ex.executionGraph?.nodeMap
     ? [...new Set(Object.values(ex.executionGraph.nodeMap).map((n: GraphNode) => n.stepType ?? '—'))].join(', ')
@@ -3277,7 +3076,7 @@ function deployTabBody(ex: ExecState): string {
 // ── Execution card ─────────────────────────────────────────────────────────
 function execCard(ex: ExecState): string {
   const isRunning = !ex.isTerminal;
-  const stages    = getStages(ex.layoutNodeMap);
+  const stages    = getStages(ex);
   const modKeys   = getModuleKeys(ex.moduleInfo);
   const parts: string[] = [];
   const terminal = TERMINAL_STATUSES_SET.has(ex.status); // Used by both themes
@@ -3665,7 +3464,7 @@ function execCard(ex: ExecState): string {
         : (isActive || ex.isTerminal || normalizedExecStatus === 'APPROVALWAITING'); // Simple: old logic
 
       if (showSteps) {
-        const steps = getStepsForStage(stage, ex.layoutNodeMap, ex.executionGraph);
+        const steps = stepsForStage(stage, ex.layoutNodeMap, ex.executionGraph, ex.yamlVersion);
 
         // Enhanced theme: wrap steps in container with tree connector
         if (state.webviewTheme === 'enhanced' && steps.length > 0) {

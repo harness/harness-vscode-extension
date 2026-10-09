@@ -336,6 +336,7 @@
   "scripts": {
     "vscode:prepublish": "node esbuild.js",
     "compile": "node esbuild.js",
+    "test": "node scripts/run-tests.js",
     "watch": "node esbuild.js --watch",
     "package": "vsce package"
   },
