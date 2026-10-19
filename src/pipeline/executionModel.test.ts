@@ -182,9 +182,12 @@ describe('steps', () => {
 
     const steps = stepsForStage(stage, { build: stage }, graph, '1');
     assert.deepEqual(steps.map(step => step.name), [
-      'Clone', 'Code Scans', 'Test Intelligence', 'Syft', 'Agent',
+      'Clone', 'Code Scans', 'Build and Test', 'Test Intelligence', 'SBOM', 'Syft', 'Agent',
     ]);
-    assert.equal(steps.find(step => step.name === 'Code Scans')?.parentGroupName, undefined);
+    assert.deepEqual(steps.map(step => step.depth), [0, 0, 0, 1, 1, 2, 2]);
+    assert.equal(steps.find(step => step.name === 'Build and Test')?.isGroup, true);
+    assert.equal(steps.find(step => step.name === 'SBOM')?.isGroup, true);
+    assert.equal(steps.find(step => step.name === 'SBOM')?.depth, 1);
     assert.equal(steps.find(step => step.name === 'Test Intelligence')?.parentGroupName, 'Build and Test');
     assert.equal(steps.find(step => step.name === 'Syft')?.parentGroupName, 'SBOM');
     assert.equal(steps.find(step => step.name === 'Agent')?.parentGroupName, 'SBOM');
@@ -192,7 +195,7 @@ describe('steps', () => {
     assert.equal(steps.find(step => step.name === 'Syft')?.logBaseKey, 'syft-key');
     assert.equal(steps.some(step => step.name === 'Deploy to QA'), false);
     assert.equal(steps.some(step => step.name === 'Initialize'), false);
-    assert.equal(steps.some(step => step.name === 'Build and Test'), false);
+    assert.equal(steps.some(step => step.name === 'parallel'), false);
   });
 
   it('returns a long sibling chain that used to exceed the nesting limit', () => {
@@ -274,8 +277,12 @@ describe('steps', () => {
       },
     };
     const groupedSteps = stepsForStage(stage, { stage }, grouped, '0');
-    assert.equal(groupedSteps[0].parentGroupName, 'PR Review');
-    assert.equal(groupedSteps[0].logBaseKey, 'agent-key');
+    assert.deepEqual(groupedSteps.map(step => step.name), ['PR Review', 'Agent']);
+    assert.equal(groupedSteps[0].isGroup, true);
+    assert.equal(groupedSteps[0].depth, 0);
+    assert.equal(groupedSteps[1].parentGroupName, 'PR Review');
+    assert.equal(groupedSteps[1].depth, 1);
+    assert.equal(groupedSteps[1].logBaseKey, 'agent-key');
 
     const layoutOnly = {
       stage,

@@ -3472,6 +3472,21 @@ function execCard(ex: ExecState): string {
         }
 
         for (const step of steps) {
+          const depth = step.depth ?? 0;
+          const indentSpan = depth > 0 ? `<span class="step-indent" style="width:${depth * 14}px"></span>` : '';
+          if (step.isGroup) {
+            const groupFailed = step.status === 'FAILED' || step.status === 'IGNOREFAILED';
+            const groupClass = state.webviewTheme === 'enhanced'
+              ? (groupFailed ? ' is-failed' : '')
+              : (groupFailed ? ' failed' : '');
+            const iconClass = state.webviewTheme === 'enhanced' ? 'step-stat' : 'step-icon';
+            parts.push(`<div class="step-row step-group${groupClass}">
+              ${indentSpan}<span class="${iconClass}">${stageIcon(step.status)}</span>
+              <span class="step-name">${esc(step.name)}</span>
+              <span class="step-dur" data-start-ts="${step.startTs || 0}" data-end-ts="${step.endTs || 0}">${dur(step.startTs, step.endTs)}</span>
+            </div>`);
+            continue;
+          }
           const stepActive   = step.status === 'RUNNING' || step.status === 'ASYNC_WAITING';
           const stepFailed   = step.status === 'FAILED';
           const stepWarning  = step.status === 'IGNOREFAILED';
@@ -3535,7 +3550,7 @@ function execCard(ex: ExecState): string {
             const tipLabel = isAgentStep ? 'View agent chat' : 'View step logs';
 
             parts.push(`<button class="step-row${isExpanded ? ' on' : ''}${stepStatusClass ? ' ' + stepStatusClass : ''}${clickable}" data-action="toggleStep"${nodeAttr}${logKeyAttr}${stepNameAttr}${stageNameAttr}${pipelineNameAttr}${planIdAttr}${statusAttr}${durationAttr}${stepTypeAttr}${agentAttr}>
-              <span class="step-stat">${stageIcon(step.status)}</span>
+              ${indentSpan}<span class="step-stat">${stageIcon(step.status)}</span>
               <span class="step-name">${esc(displayName)}</span>
               <span class="step-dur" data-start-ts="${step.startTs || 0}" data-end-ts="${step.endTs || 0}">${dur(step.startTs, step.endTs)}</span>
               ${canExpand ? `<span class="tip-wrap"><span class="step-ext">${extIcon}</span><span class="tip">${tipLabel}</span></span>` : ''}
@@ -3546,7 +3561,7 @@ function execCard(ex: ExecState): string {
             const extIcon = showExtIcon ? `<span class="tip-wrap"><span class="step-ext-ic">↗</span><span class="tip">${isAgentStep ? 'View agent chat' : 'View step logs'}</span></span>` : '';
 
             parts.push(`<div class="step-row${stepActive ? ' step-running' : ''}${stepFailed ? ' failed' : ''}${stepWarning ? ' warning' : ''}${clickable}" data-action="toggleStep"${nodeAttr}${logKeyAttr}${stepNameAttr}${stageNameAttr}${pipelineNameAttr}${planIdAttr}${statusAttr}${durationAttr}${stepTypeAttr}${agentAttr}>
-              <span class="step-toggle${isLoading ? ' step-loading' : ''}">${toggleIcon}</span>
+              ${indentSpan}<span class="step-toggle${isLoading ? ' step-loading' : ''}">${toggleIcon}</span>
               <span class="step-icon">${stageIcon(step.status)}</span>
               <span class="step-name">${esc(displayName)}${extIcon}</span>
               <span class="step-dur" data-start-ts="${step.startTs || 0}" data-end-ts="${step.endTs || 0}">${dur(step.startTs, step.endTs)}</span>

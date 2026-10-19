@@ -59,6 +59,10 @@ export interface StepView {
   stepType?: string;
   identifier?: string;
   parentGroupName?: string;
+  /** Indent level under the stage. Children of a visible group are one level deeper. */
+  depth: number;
+  /** Step group row. Its children follow at depth + 1. */
+  isGroup?: boolean;
 }
 
 // Graph step types that open a new stage. Traversal stops so one stage's
@@ -88,8 +92,8 @@ const CONTAINER_TYPES = new Set([
   'LITEENGINE_TASK',
 ]);
 
-// Legacy step groups and the v1 GROUP alias. Children are flattened and keep
-// the group name. A group with no materialized children stays as one row.
+// Legacy step groups and the v1 GROUP alias. The group stays visible, like the
+// Harness CLI tree, and its children are indented one level.
 const STEP_GROUP_TYPES = new Set(['STEP_GROUP', 'CI_STEP_GROUP', 'GROUP']);
 
 // v1 layout stages. Steps in that format are also tagged nodeGroup "STAGE",
@@ -303,26 +307,32 @@ function collectSteps(
 
   if (STEP_GROUP_TYPES.has(stepType)) {
     const groupName = node.name || parentGroupName;
+    const self = node.name ? [toStep(nodeId, node, parentGroupName, nesting, true)] : [];
     const childSteps = children.flatMap(id =>
       collectSteps(id, nodeMap, adjList, nesting + 1, visited, groupName)
     );
-    const rows = childSteps.length > 0
-      ? childSteps
-      : (node.name ? [toStep(nodeId, node, parentGroupName)] : []);
-    return [...rows, ...followNext()];
+    return [...self, ...childSteps, ...followNext()];
   }
 
+  // Hidden plumbing (forks, lite-engine, sections) keeps its children at this
+  // depth. The CLI does the same for nodes it does not print.
   if (CONTAINER_TYPES.has(stepType) || !node.name) {
     const fromChildren = children.flatMap(id =>
-      collectSteps(id, nodeMap, adjList, nesting + 1, visited, parentGroupName)
+      collectSteps(id, nodeMap, adjList, nesting, visited, parentGroupName)
     );
     return [...fromChildren, ...followNext()];
   }
 
-  return [toStep(nodeId, node, parentGroupName), ...followNext()];
+  return [toStep(nodeId, node, parentGroupName, nesting), ...followNext()];
 }
 
-function toStep(nodeId: string, node: GraphNodeLike, parentGroupName?: string): StepView {
+function toStep(
+  nodeId: string,
+  node: GraphNodeLike,
+  parentGroupName: string | undefined,
+  depth: number,
+  isGroup = false,
+): StepView {
   return {
     name: node.name ?? '',
     status: node.status ?? '',
@@ -333,6 +343,8 @@ function toStep(nodeId: string, node: GraphNodeLike, parentGroupName?: string): 
     stepType: node.stepType,
     identifier: node.identifier,
     parentGroupName,
+    depth,
+    isGroup,
   };
 }
 
@@ -345,6 +357,7 @@ function layoutStep(node: LayoutLike): StepView {
     logBaseKey: node.logBaseKey,
     stepType: node.stepType,
     identifier: node.nodeIdentifier,
+    depth: 0,
   };
 }
 
