@@ -7,7 +7,7 @@ import { logger } from '../utils/logger';
 export type WebviewMessage =
   | { type: 'GIT_CONTEXT';      ctx: GitContext | null; org?: string; project?: string; defaultView?: string; logViewerVariation?: string; webviewTheme?: 'simple' | 'enhanced'; ideThemeKind?: number; aiChatEnabled?: boolean }
   | { type: 'EXECUTION_UPDATE'; execution: ExecutionDetail; executionGraph?: ExecutionGraph | null; isTerminal?: boolean; harnessUrl?: string; commitWebUrl?: string }
-  | { type: 'LOG_CHUNK';        nodeId: string; lines: string[]; autoExpand?: boolean }
+  | { type: 'LOG_CHUNK';        nodeId: string; lines: string[]; autoExpand?: boolean; replace?: boolean }
   | { type: 'CD_UPDATE';        deployments: unknown }
   | { type: 'STO_SUMMARY';      count: number; high: number; medium: number; critical: number }
   | { type: 'TI_SUMMARY';       failed: number; flaky: number; selected: number; total: number }

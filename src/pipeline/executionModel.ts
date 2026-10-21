@@ -19,14 +19,24 @@ export interface LayoutLike {
   failureInfo?: { message?: string };
 }
 
+export interface LogResponseLike {
+  logKeys?: string[];
+  units?: string[];
+}
+
 export interface ExecutableResponseLike {
-  task?: { logKeys?: string[] };
-  taskChain?: { logKeys?: string[] };
-  async?: { logKeys?: string[] };
-  asyncChain?: { logKeys?: string[] };
-  sync?: { logKeys?: string[] };
-  child?: { logKeys?: string[] };
-  children?: { logKeys?: string[] };
+  task?: LogResponseLike;
+  taskChain?: LogResponseLike;
+  async?: LogResponseLike;
+  asyncChain?: LogResponseLike;
+  sync?: LogResponseLike;
+  child?: LogResponseLike;
+  children?: LogResponseLike;
+}
+
+export interface LogUnit {
+  key: string;
+  unit: string;
 }
 
 export interface GraphNodeLike {
@@ -56,6 +66,8 @@ export interface StepView {
   endTs?: number;
   nodeId?: string;
   logBaseKey?: string;
+  /** Every log section for this step, in graph order. */
+  logUnits?: LogUnit[];
   stepType?: string;
   identifier?: string;
   parentGroupName?: string;
@@ -142,18 +154,32 @@ export function graphStatusHash(graph: GraphLike | null | undefined): string {
     .join('|');
 }
 
+/** Ordered log sections from executableResponses[0], then logBaseKey. */
+export function resolveLogUnits(node: GraphNodeLike): LogUnit[] {
+  const response = node.executableResponses?.[0];
+  const source = response?.task
+    ?? response?.taskChain
+    ?? response?.async
+    ?? response?.asyncChain
+    ?? response?.sync
+    ?? response?.child
+    ?? response?.children;
+  const keys = source?.logKeys ?? [];
+  const labels = source?.units ?? [];
+  const units: LogUnit[] = [];
+  keys.forEach((key, index) => {
+    if (!key) return;
+    units.push({ key, unit: labels[index] || `Section ${index + 1}` });
+  });
+  if (units.length === 0 && node.logBaseKey) {
+    units.push({ key: node.logBaseKey, unit: 'Section 1' });
+  }
+  return units;
+}
+
 /** First executable-response log key, then the node's own logBaseKey. */
 export function resolveLogKey(node: GraphNodeLike): string | undefined {
-  const response = node.executableResponses?.[0];
-  const keys = response?.task?.logKeys
-    ?? response?.taskChain?.logKeys
-    ?? response?.async?.logKeys
-    ?? response?.asyncChain?.logKeys
-    ?? response?.sync?.logKeys
-    ?? response?.child?.logKeys
-    ?? response?.children?.logKeys
-    ?? [];
-  return keys.find(key => !!key) || node.logBaseKey || undefined;
+  return resolveLogUnits(node)[0]?.key;
 }
 
 export function findStageGraphId(stage: LayoutLike, graph: GraphLike): string | undefined {
@@ -333,13 +359,15 @@ function toStep(
   depth: number,
   isGroup = false,
 ): StepView {
+  const logUnits = resolveLogUnits(node);
   return {
     name: node.name ?? '',
     status: node.status ?? '',
     startTs: timestamp(node.startTs),
     endTs: timestamp(node.endTs),
     nodeId,
-    logBaseKey: resolveLogKey(node),
+    logBaseKey: logUnits[0]?.key,
+    logUnits,
     stepType: node.stepType,
     identifier: node.identifier,
     parentGroupName,
@@ -355,6 +383,7 @@ function layoutStep(node: LayoutLike): StepView {
     startTs: timestamp(node.startTs),
     endTs: timestamp(node.endTs),
     logBaseKey: node.logBaseKey,
+    logUnits: node.logBaseKey ? [{ key: node.logBaseKey, unit: 'Section 1' }] : [],
     stepType: node.stepType,
     identifier: node.nodeIdentifier,
     depth: 0,

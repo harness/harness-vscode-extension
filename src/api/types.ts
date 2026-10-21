@@ -120,13 +120,13 @@ export interface ExecutionNode {
 }
 
 export interface ExecutableResponse {
-  task?: { logKeys?: string[] };
-  taskChain?: { logKeys?: string[] };
-  async?: { logKeys?: string[] };
-  asyncChain?: { logKeys?: string[] };
-  sync?: { logKeys?: string[] };
-  child?: { logKeys?: string[] };
-  children?: { logKeys?: string[] };
+  task?: { logKeys?: string[]; units?: string[] };
+  taskChain?: { logKeys?: string[]; units?: string[] };
+  async?: { logKeys?: string[]; units?: string[] };
+  asyncChain?: { logKeys?: string[]; units?: string[] };
+  sync?: { logKeys?: string[]; units?: string[] };
+  child?: { logKeys?: string[]; units?: string[] };
+  children?: { logKeys?: string[]; units?: string[] };
 }
 
 export interface StoFinding {

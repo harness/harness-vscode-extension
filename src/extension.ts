@@ -15,6 +15,7 @@ import { submitApproval } from './api/approvalService';
 import { rerunPipeline } from './api/rerunService';
 import { abortExecution, InterruptType } from './api/abortService';
 import { dispatchModules } from './pipeline/executionDispatcher';
+import { resolveLogUnits, type GraphNodeLike, type LogUnit } from './pipeline/executionModel';
 import { initFmeClient, destroyFmeClient, getLogViewerVariation } from './fme/fmeClient';
 import { LogContentProvider, LOG_SCHEME } from './logs/logContentProvider';
 import { openLogAsEditorTab } from './logs/logEditorTab';
@@ -367,8 +368,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           // Agent step: open chat viewer panel instead of log editor tab
           openAgentChatTabForStep(currentConfig, msg.logBaseKey, msg.stepName, msg.stageName, msg.pipelineName, msg.planExecutionId, msg.status, msg.durationMs, bridge, msg.nodeId);
         } else {
+          const node = currentViewedExecution?.executionGraph?.nodeMap?.[msg.nodeId] as GraphNodeLike | undefined;
+          const units = node ? resolveLogUnits(node) : [];
+          const endTs = typeof node?.endTs === 'number' ? node.endTs : undefined;
           // Run log fetch in background - don't block message handler or poller
-          fetchStepLogsOnDemand(currentConfig, bridge, logProvider, msg.logBaseKey, msg.nodeId, msg.stepName, msg.stageName, msg.pipelineName, msg.planExecutionId, msg.status, msg.durationMs);
+          fetchStepLogsOnDemand(currentConfig, bridge, logProvider, msg.logBaseKey, msg.nodeId, msg.stepName, msg.stageName, msg.pipelineName, msg.planExecutionId, msg.status, msg.durationMs, { units, endTs });
         }
       }
     } else if (m.type === 'setDefaultView') {
@@ -1528,11 +1532,12 @@ async function fetchStepLogsOnDemand(
   pipelineName?: string,
   planExecutionId?: string,
   status?: string,
-  durationMs?: number
+  durationMs?: number,
+  logOptions?: { units?: LogUnit[]; endTs?: number | null },
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    logger.debug('Extension', 'Fetching logs on-demand', { logBaseKey, nodeId });
+    logger.debug('Extension', 'Fetching logs on-demand', { logBaseKey, nodeId, units: logOptions?.units?.length ?? 0 });
 
     // Send loading state
     bridge.send({
@@ -1542,42 +1547,14 @@ async function fetchStepLogsOnDemand(
 
     const { fetchStepLogs } = await import('./api/logService');
     let lines: string[] = [];
-    let attempts = 0;
-
-    // Try immediately first
     try {
-      lines = await fetchStepLogs(config as any, logBaseKey);
-      attempts++;
-      logger.debug('Extension', `Initial fetch: ${lines.length} lines`, { nodeId });
-    } catch (err) {
-      logger.error('Extension', 'Initial fetch error:', err);
-    }
-
-    // Retry with exponential backoff if no logs found (logs might not be indexed yet)
-    const retryDelays = [3000, 5000, 7000, 10000]; // 3s, 5s, 7s, 10s (total 25s)
-    for (let i = 0; i < retryDelays.length && lines.length === 0; i++) {
-      logger.debug('Extension', `Retry ${i + 1}/${retryDelays.length} in ${retryDelays[i]}ms...`, {
+      lines = await fetchStepLogs(config as any, logBaseKey, logOptions);
+      logger.debug('Extension', `Fetched ${lines.length} lines`, {
         nodeId,
-        logBaseKey,
-        elapsed: `${((Date.now() - startTime) / 1000).toFixed(1)}s`
+        elapsed: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
       });
-      await new Promise<void>(resolve => {
-        (globalThis as any).setTimeout(() => resolve(), retryDelays[i]);
-      });
-
-      try {
-        lines = await fetchStepLogs(config as any, logBaseKey);
-        attempts++;
-        logger.debug('Extension', `Retry ${i + 1} result: ${lines.length} lines`, { nodeId });
-        if (lines.length > 0) {
-          logger.debug('Extension', `✓ Logs found after ${attempts} attempts (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
-            nodeId,
-            lineCount: lines.length
-          });
-        }
-      } catch (err) {
-        logger.error('Extension', `Retry ${i + 1} error:`, err);
-      }
+    } catch (err) {
+      logger.error('Extension', 'Log fetch error:', err);
     }
 
     if (lines.length > 0) {
@@ -1638,12 +1615,13 @@ async function fetchStepLogsOnDemand(
           type: 'LOG_CHUNK',
           nodeId,
           lines,
+          replace: true,
           autoExpand: false, // Don't auto-expand in detail view - let user click to expand
         });
         logger.debug('Extension', '✓ LOG_CHUNK message sent', { nodeId });
       }
     } else {
-      logger.debug('Extension', `✗ No logs found after ${attempts} attempts (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
+      logger.debug('Extension', `✗ No logs found (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
         nodeId,
         logBaseKey
       });

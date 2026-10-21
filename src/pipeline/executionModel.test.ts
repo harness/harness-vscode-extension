@@ -6,6 +6,7 @@ import {
   graphStatusHash,
   listLayoutStages,
   resolveLogKey,
+  resolveLogUnits,
   stageIdFromBaseFqn,
   stepsForStage,
   type GraphLike,
@@ -324,5 +325,21 @@ describe('log keys', () => {
     }), 'from-response');
     assert.equal(resolveLogKey({ logBaseKey: 'base', executableResponses: [{ async: { logKeys: [] } }] }), 'base');
     assert.equal(resolveLogKey({}), undefined);
+  });
+
+  it('keeps every log unit in order and pairs it with its label', () => {
+    const units = resolveLogUnits({
+      logBaseKey: 'base',
+      executableResponses: [{
+        task: { logKeys: ['init', '', 'run'], units: ['Initialize', 'Skipped', ''] },
+      }],
+    });
+    assert.deepEqual(units, [
+      { key: 'init', unit: 'Initialize' },
+      { key: 'run', unit: 'Section 3' },
+    ]);
+    assert.deepEqual(resolveLogUnits({ logBaseKey: 'base' }), [
+      { key: 'base', unit: 'Section 1' },
+    ]);
   });
 });

@@ -3,6 +3,7 @@ import { HarnessConfig } from '../config/configManager';
 import { WebviewBridge } from '../ui/webviewBridge';
 import { LayoutNode, ExecutionNode, ExecutionGraph } from './types';
 import { listLayoutStages } from '../pipeline/executionModel';
+import { CompletedLogUnit, fetchCompletedLogs, parseLogLines } from './completedLogs';
 import { logger } from '../utils/logger';
 
 const TERMINAL_STATUSES = new Set(['SUCCESS', 'FAILED', 'ABORTED', 'SKIPPED', 'EXPIRED']);
@@ -308,7 +309,7 @@ async function decompressAndParse(buf: Buffer): Promise<string[]> {
     text = buf.toString('utf8');
   }
 
-  return parseLogLines(text).slice(-200);
+  return parseLogLines(text);
 }
 
 /**
@@ -337,19 +338,6 @@ function isBinaryData(buf: Buffer): boolean {
   return (nonPrintable / sample.length) > 0.3;
 }
 
-function parseLogLines(text: string): string[] {
-  return text.split('\n')
-    .map(l => {
-      try {
-        const obj = JSON.parse(l) as { out?: string; args?: string; message?: string };
-        return (obj.out ?? obj.args ?? obj.message ?? '').trimEnd();
-      } catch {
-        return l.trimEnd();
-      }
-    })
-    .filter(l => l.length > 0);
-}
-
 // ── Log prefix builder ────────────────────────────────────────────────────────
 
 /**
@@ -364,25 +352,42 @@ function parseLogLines(text: string): string[] {
 
 // ── Main fetch function ───────────────────────────────────────────────────────
 
+export interface FetchStepLogsOptions {
+  /** All log sections for the step. A single logBaseKey is used when omitted. */
+  units?: CompletedLogUnit[];
+  /** Step end time. Recent completions retry an empty gateway blob. */
+  endTs?: number | null;
+}
+
 /**
- * Download logs for a completed step via:
- * POST /gateway/log-service/blob/download?accountID=...&prefix=<logBaseKey>
- * x-api-key: <PAT>
+ * Fetch logs for a completed step.
  *
- * Returns a signed URL → download ZIP → extract → parse log lines.
- */
-/**
- * Fetch logs for a step. Two approaches:
- * 1. POST /gateway/log-service/blob/download (requires FF SPG_LOG_SERVICE_ENABLE_DOWNLOAD_LOGS)
- * 2. GET /log-service/stream with log-service token (works without FF, for recent runs)
- *
- * Returns [] if logs are unavailable (FF not enabled + stream empty).
+ * The Harness CLI reads each unit with GET /gateway/log-service/blob. When that
+ * endpoint cannot serve a key, fall back to the signed ZIP download and then
+ * the one-shot log stream.
  */
 export async function fetchStepLogs(
   config: HarnessConfig,
   logBaseKey: string,
+  options: FetchStepLogsOptions = {},
 ): Promise<string[]> {
-  logger.debug('LogService', 'fetchStepLogs start', { logBaseKey });
+  const units = (options.units ?? []).filter(unit => unit.key);
+  const resolved = units.length
+    ? units
+    : (logBaseKey ? [{ key: logBaseKey, unit: 'Section 1' }] : []);
+  logger.debug('LogService', 'fetchStepLogs start', { units: resolved.map(unit => unit.key) });
+  if (!resolved.length) return [];
+  return fetchCompletedLogs(config, resolved, { endTs: options.endTs }, {
+    fallback: key => fetchLegacyStepLogs(config, key),
+    debug: (message, extra) => logger.debug('LogService', message, extra),
+  });
+}
+
+async function fetchLegacyStepLogs(
+  config: HarnessConfig,
+  logBaseKey: string,
+): Promise<string[]> {
+  logger.debug('LogService', 'fetchLegacyStepLogs start', { logBaseKey });
 
   // ── Approach 1: blob/download (PAT, requires FF) ──────────────────────────
   let zipFailed = false;
@@ -479,7 +484,7 @@ export async function fetchStepLogs(
         if (res.ok) {
           const lines = parseLogLines(await res.text());
           logger.debug('LogService', 'Approach 2: parsed lines', { count: lines.length });
-          if (lines.length > 0) return lines.slice(-200);
+          if (lines.length > 0) return lines;
         } else {
           logger.debug('LogService', 'Approach 2: stream endpoint non-OK', { status: res.status });
         }

@@ -695,18 +695,20 @@ window.addEventListener('message', ({ data: msg }) => {
         const ex = state.executions.get(state.detailExecId);
         if (ex) {
           const prev = ex.stepLogs[nodeId] ?? [];
-          ex.stepLogs[nodeId] = [...prev, ...msg.lines].slice(-100);
+          const next = msg.replace ? msg.lines : [...prev, ...msg.lines].slice(-100);
+          ex.stepLogs[nodeId] = next;
           ex.activeStageId = nodeId;
-          ex.logLines = [...ex.logLines, ...msg.lines].slice(-100);
+          ex.logLines = msg.replace ? msg.lines : [...ex.logLines, ...msg.lines].slice(-100);
           foundExecution = true;
         }
       } else {
         // In live mode, store in any execution (there should be only one)
         for (const [, ex] of state.executions) {
           const prev = ex.stepLogs[nodeId] ?? [];
-          ex.stepLogs[nodeId] = [...prev, ...msg.lines].slice(-100);
+          const next = msg.replace ? msg.lines : [...prev, ...msg.lines].slice(-100);
+          ex.stepLogs[nodeId] = next;
           ex.activeStageId = nodeId;
-          ex.logLines = [...ex.logLines, ...msg.lines].slice(-100);
+          ex.logLines = msg.replace ? msg.lines : [...ex.logLines, ...msg.lines].slice(-100);
           foundExecution = true;
           break;
         }
