@@ -273,8 +273,8 @@ interface ExecState {
   stepLogs: Record<string, string[]>;  // nodeId → lines
   aida?:  { stageId: string; cause?: string; summary?: string; deepDiveUrl?: string };
   opa?:   { policySetName?: string; details?: Array<{ policyName: string; status: string; denyMessages?: string[] }>; policyUrl?: string };
-  approval?: { planExecutionId: string; approvers?: string[]; userGroups?: string[]; minimumCount?: number; deadline?: number; canApprove?: boolean; stageIdentifier?: string };
-  externalApproval?: { planExecutionId: string; approvalType: 'Jira' | 'ServiceNow'; ticketId: string; ticketUrl?: string; projectKey?: string; issueType?: string; ticketType?: string; approvalCriteria?: string; rejectionCriteria?: string; stageIdentifier?: string };
+  approvals?: Record<string, { planExecutionId: string; nodeId: string; approvalInstanceId?: string; approvers?: string[]; userGroups?: string[]; minimumCount?: number; deadline?: number; canApprove?: boolean; stageIdentifier?: string }>;
+  externalApprovals?: Record<string, { planExecutionId: string; nodeId: string; approvalType: 'Jira' | 'ServiceNow'; ticketId: string; ticketUrl?: string; projectKey?: string; issueType?: string; ticketType?: string; approvalCriteria?: string; rejectionCriteria?: string; stageIdentifier?: string }>;
   cost?:  { totalCost?: number; currency?: string; branchAvgCost?: number };
   sto?:   { count: number; critical: number; high: number; medium: number };
   stoScan?: StoScanSummary;
@@ -670,8 +670,8 @@ window.addEventListener('message', ({ data: msg }) => {
         stepLogs:          prev?.stepLogs ?? {},
         activeStageId:     prev?.activeStageId,
         aida: prev?.aida, opa: opaData, cost: prev?.cost,
-        approval: isTerminal ? undefined : prev?.approval,
-        externalApproval: isTerminal ? undefined : prev?.externalApproval,
+        approvals: isTerminal ? undefined : prev?.approvals,
+        externalApprovals: isTerminal ? undefined : prev?.externalApprovals,
         sto: prev?.sto,   ti: prev?.ti,   ssca: prev?.ssca, cd: prev?.cd,
         stoScan: prev?.stoScan,
       });
@@ -744,8 +744,7 @@ window.addEventListener('message', ({ data: msg }) => {
 
     case 'APPROVAL_UPDATE':
       console.log('[Webview] APPROVAL_UPDATE received:', msg);
-      // Set approval only on the execution that matches planExecutionId
-      // (not all executions, which would incorrectly set approval on the wrong pipeline)
+      // Set approvals only on the execution that matches planExecutionId.
       let approvalEx = state.executions.get(msg.planExecutionId);
       if (!approvalEx) {
         // Execution doesn't exist yet (APPROVAL_UPDATE arrived before HISTORY_DETAIL)
@@ -767,38 +766,53 @@ window.addEventListener('message', ({ data: msg }) => {
         };
         state.executions.set(msg.planExecutionId, approvalEx);
       }
-      approvalEx.approval = {
-        planExecutionId:  msg.planExecutionId,
-        approvers:        msg.approvers,
-        userGroups:       msg.userGroups,
-        minimumCount:     msg.minimumCount,
-        deadline:         msg.deadline,
-        canApprove:       msg.canApprove ?? true,
-        stageIdentifier:  msg.stageIdentifier,
-      };
-      console.log('[Webview] Set approval on execution:', {
-        planExecutionId: approvalEx.planExecutionId,
-        approval: approvalEx.approval
-      });
+      approvalEx.approvals = Object.fromEntries((msg.approvals ?? []).map(approval => [approval.nodeId, {
+        planExecutionId: msg.planExecutionId,
+        nodeId: approval.nodeId,
+        approvalInstanceId: approval.approvalInstanceId,
+        approvers: approval.approvers,
+        userGroups: approval.userGroups,
+        minimumCount: approval.minimumCount,
+        deadline: approval.deadline,
+        canApprove: approval.canApprove ?? true,
+        stageIdentifier: approval.stageIdentifier,
+      }]));
       break;
 
-    case 'EXTERNAL_APPROVAL_UPDATE':
-      const extApprovalEx = state.executions.get(msg.planExecutionId);
-      if (extApprovalEx) {
-        extApprovalEx.externalApproval = {
-          planExecutionId:    msg.planExecutionId,
-          approvalType:       msg.approvalType,
-          ticketId:           msg.ticketId,
-          ticketUrl:          msg.ticketUrl,
-          projectKey:         msg.projectKey,
-          issueType:          msg.issueType,
-          ticketType:         msg.ticketType,
-          approvalCriteria:   msg.approvalCriteria,
-          rejectionCriteria:  msg.rejectionCriteria,
-          stageIdentifier:    msg.stageIdentifier,
+    case 'EXTERNAL_APPROVAL_UPDATE': {
+      let extApprovalEx = state.executions.get(msg.planExecutionId);
+      if (!extApprovalEx) {
+        extApprovalEx = {
+          planExecutionId: msg.planExecutionId,
+          pipelineIdentifier: '',
+          name: '',
+          status: 'APPROVALWAITING',
+          startTs: 0,
+          endTs: 0,
+          moduleInfo: {},
+          layoutNodeMap: {},
+          executionGraph: null,
+          isTerminal: false,
+          logLines: [],
+          stepLogs: {},
         };
+        state.executions.set(msg.planExecutionId, extApprovalEx);
       }
+      extApprovalEx.externalApprovals = Object.fromEntries((msg.approvals ?? []).map(approval => [approval.nodeId, {
+        planExecutionId: msg.planExecutionId,
+        nodeId: approval.nodeId,
+        approvalType: approval.approvalType,
+        ticketId: approval.ticketId,
+        ticketUrl: approval.ticketUrl,
+        projectKey: approval.projectKey,
+        issueType: approval.issueType,
+        ticketType: approval.ticketType,
+        approvalCriteria: approval.approvalCriteria,
+        rejectionCriteria: approval.rejectionCriteria,
+        stageIdentifier: approval.stageIdentifier,
+      }]));
       break;
+    }
 
     case 'STO_SUMMARY':
       for (const [, ex] of state.executions) {
@@ -906,7 +920,7 @@ window.addEventListener('message', ({ data: msg }) => {
         triggerType: (historyItem.triggerInfo as any).triggerType,
         triggeredBy: historyItem.triggerInfo.triggeredBy
       } : undefined;
-      // Preserve approval/externalApproval from earlier messages if not in msg
+      // Preserve per-step approvals from earlier messages if not in msg
       const prev = state.executions.get(ex.planExecutionId);
 
       // Extract OPA data from governanceMetadata if present
@@ -947,8 +961,8 @@ window.addEventListener('message', ({ data: msg }) => {
         logLines:          [],
         stepLogs:          {},
         aida: msg.aida, opa: opaData, cost: msg.cost,
-        approval: msg.approval ?? prev?.approval,
-        externalApproval: msg.externalApproval ?? prev?.externalApproval,
+        approvals: (msg.approval as ExecState['approvals']) ?? prev?.approvals,
+        externalApprovals: (msg.externalApproval as ExecState['externalApprovals']) ?? prev?.externalApprovals,
         sto: msg.sto,   ti: msg.ti,   ssca: msg.ssca, cd: msg.cd,
         stoScan: prev?.stoScan,
       });
@@ -3505,8 +3519,10 @@ function execCard(ex: ExecState): string {
           const isWaitingForApproval = normalizedStatus === 'APPROVALWAITING' ||
                                        normalizedStatus === 'ASYNCWAITING' ||
                                        normalizedStatus === 'RUNNING';
-          const hasApprovalCard = ((isApprovalStep && ex.approval && !ex.isTerminal) ||
-                                   (isExternalApprovalStep && ex.externalApproval && !ex.isTerminal)) &&
+          const stepApproval = step.nodeId ? ex.approvals?.[step.nodeId] : undefined;
+          const stepExternalApproval = step.nodeId ? ex.externalApprovals?.[step.nodeId] : undefined;
+          const hasApprovalCard = ((isApprovalStep && stepApproval && !ex.isTerminal) ||
+                                   (isExternalApprovalStep && stepExternalApproval && !ex.isTerminal)) &&
                                    isWaitingForApproval;
 
           // Auto-expand approval steps to show the approval card
@@ -3570,12 +3586,11 @@ function execCard(ex: ExecState): string {
             </div>`);
           }
 
-          if (isApprovalStep && ex.approval && !ex.isTerminal && isWaitingForApproval) {
-            // Render Harness approval card inside the approval step (only if actively waiting)
-            parts.push(approvalCard(ex.approval, ex.harnessUrl));
-          } else if (isExternalApprovalStep && ex.externalApproval && !ex.isTerminal && isWaitingForApproval) {
-            // Render external approval card inside the approval step (only if actively waiting)
-            parts.push(externalApprovalCard(ex.externalApproval));
+          if (isApprovalStep && stepApproval && !ex.isTerminal && isWaitingForApproval) {
+            // Render this step's own approval card. Other waiting steps keep theirs.
+            parts.push(approvalCard(stepApproval, ex.harnessUrl));
+          } else if (isExternalApprovalStep && stepExternalApproval && !ex.isTerminal && isWaitingForApproval) {
+            parts.push(externalApprovalCard(stepExternalApproval));
           } else if (isExpanded) {
             // Regular log display for non-approval steps
             if (isLoading) {
@@ -3721,7 +3736,7 @@ function aidaCard(ex: ExecState): string {
   </div>`;
 }
 
-function approvalCard(a: NonNullable<ExecState['approval']>, harnessUrl?: string): string {
+function approvalCard(a: NonNullable<NonNullable<ExecState['approvals']>[string]>, harnessUrl?: string): string {
   const who: string[] = [];
   if (a.userGroups?.length)  who.push(...a.userGroups);
   if (a.approvers?.length)   who.push(...a.approvers);
@@ -3741,8 +3756,8 @@ function approvalCard(a: NonNullable<ExecState['approval']>, harnessUrl?: string
 
     const actionsHtml = a.canApprove !== false
       ? `<div class="approval-acts">
-          <button class="btn-approve" data-action="approve" data-id="${esc(a.planExecutionId)}">${checkIcon} Approve</button>
-          <button class="btn-reject" data-action="reject" data-id="${esc(a.planExecutionId)}">${xIcon} Reject</button>
+          <button class="btn-approve" data-action="approve" data-id="${esc(a.planExecutionId)}" data-nodeid="${esc(a.nodeId)}" data-instance="${esc(a.approvalInstanceId ?? '')}">${checkIcon} Approve</button>
+          <button class="btn-reject" data-action="reject" data-id="${esc(a.planExecutionId)}" data-nodeid="${esc(a.nodeId)}" data-instance="${esc(a.approvalInstanceId ?? '')}">${xIcon} Reject</button>
         </div>`
       : `<div style="padding: 6px 10px; font-size: 11px; color: var(--fg-2); font-style: italic;">You are not in the approver list for this step.</div>`;
 
@@ -3779,8 +3794,8 @@ function approvalCard(a: NonNullable<ExecState['approval']>, harnessUrl?: string
 
   const actionsHtml = a.canApprove !== false
     ? `<div class="approval-actions">
-        <button class="approval-btn approval-approve" data-action="approve" data-id="${esc(a.planExecutionId)}">✓ Approve</button>
-        <button class="approval-btn approval-reject"  data-action="reject"  data-id="${esc(a.planExecutionId)}">✕ Reject</button>
+        <button class="approval-btn approval-approve" data-action="approve" data-id="${esc(a.planExecutionId)}" data-nodeid="${esc(a.nodeId)}" data-instance="${esc(a.approvalInstanceId ?? '')}">✓ Approve</button>
+        <button class="approval-btn approval-reject"  data-action="reject"  data-id="${esc(a.planExecutionId)}" data-nodeid="${esc(a.nodeId)}" data-instance="${esc(a.approvalInstanceId ?? '')}">✕ Reject</button>
       </div>`
     : `<div class="approval-no-permission">You are not in the approver list for this step.</div>`;
 
@@ -3796,7 +3811,7 @@ function approvalCard(a: NonNullable<ExecState['approval']>, harnessUrl?: string
   </div>`;
 }
 
-function externalApprovalCard(a: NonNullable<ExecState['externalApproval']>): string {
+function externalApprovalCard(a: NonNullable<NonNullable<ExecState['externalApprovals']>[string]>): string {
   const icon = a.approvalType === 'Jira' ? '🎫' : '📋';
   const ticketLink = a.ticketUrl
     ? `<a class="approval-open-link" data-action="openUrl" data-url="${esc(a.ticketUrl)}">${esc(a.ticketId)} ↗</a>`
@@ -4615,7 +4630,13 @@ function bind(): void {
       const action = el.dataset['action'] === 'reject' ? 'REJECT' : 'APPROVE';
       if (!id) return;
       el.setAttribute('disabled', 'true');
-      vscode.postMessage({ type: 'approval', planExecutionId: id, action });
+      vscode.postMessage({
+        type: 'approval',
+        planExecutionId: id,
+        nodeId: el.dataset['nodeid'],
+        approvalInstanceId: el.dataset['instance'] || undefined,
+        action,
+      });
     });
   });
 

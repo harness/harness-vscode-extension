@@ -2,7 +2,7 @@ import { HarnessClient } from '../api/harnessClient';
 import { HarnessConfig } from '../config/configManager';
 import { DiagnosticsManager } from '../features/diagnosticsManager';
 import { WebviewBridge } from '../ui/webviewBridge';
-import { ExecutionDetail, ExecutionGraph } from '../api/types';
+import { ExecutionDetail, ExecutionGraph, ExecutionNode } from '../api/types';
 import { GitContext } from '../git/gitContext';
 // STO imports - disabled for now
 // import { getStoFindings } from '../api/stoService';
@@ -15,9 +15,17 @@ import { applySSCA, summariseSSCA } from '../features/sscaAnnotations';
 // import { getAidaRca } from '../api/aidaService';
 import { getBuildCost } from '../api/ccmService';
 import { parseStoScan } from '../api/stoScan';
+import { approvalInstanceIdFromNode } from '../api/approvalInstances';
 import { canCurrentUserApprove } from '../api/userService';
+import { formatUserGroupLabel } from '../api/userGroups';
 import { stageIdFromBaseFqn } from './executionModel';
 import { logger } from '../utils/logger';
+
+function criteriaText(criteria: { criteriaSpec?: { conditions?: Array<{ key?: string; operator?: string; value?: string }> } } | undefined): string {
+  return (criteria?.criteriaSpec?.conditions ?? [])
+    .map(condition => `${condition.key} ${condition.operator} ${condition.value}`)
+    .join(', ');
+}
 
 export async function dispatchModules(
   execution: ExecutionDetail,
@@ -132,152 +140,100 @@ export async function dispatchModules(
     webview.send({ type: 'OPA_UPDATE', policy });
   }
 
-  // Approval: detect APPROVAL_WAITING stage and fetch instance details
+  // Approval: one card per waiting step, keyed by its graph node id.
   if (!isTerminal && status === 'APPROVALWAITING') {
     try {
-      const allNodes = Object.values(executionGraph?.nodeMap ?? {});
+      const entries = Object.entries(executionGraph?.nodeMap ?? {});
+      const waiting = (matches: (node: ExecutionNode) => boolean) => entries
+        .filter(([, node]) => matches(node))
+        .map(([nodeId, node]) => ({ nodeId, node }));
+      const isWaiting = (node: ExecutionNode) => /waiting|running/i.test(node.status ?? '');
 
-      // Debug: Log all nodes with approval-related types or waiting status
-      const approvalLikeNodes = allNodes.filter(n =>
-        n.stepType?.toLowerCase().includes('approval') || /waiting/i.test(n.status)
-      );
+      const approvalLikeNodes = entries
+        .map(([, node]) => node)
+        .filter(node => node.stepType?.toLowerCase().includes('approval') || /waiting/i.test(node.status));
       if (approvalLikeNodes.length > 0) {
         logger.debug('Harness', 'Approval detection - found nodes:', approvalLikeNodes.map(n => ({
           name: n.name,
           stepType: n.stepType,
           status: n.status,
-          baseFqn: (n as any).baseFqn
+          baseFqn: n.baseFqn,
         })));
       }
 
-      // Check for Harness native approval
-      const harnessApprovalNode = allNodes.find(
-        n => (n.stepType === 'HarnessApproval' || n.stepType === 'HARNESS_APPROVAL') &&
-             /waiting|running/i.test(n.status)
+      const harnessNodes = waiting(node =>
+        (node.stepType === 'HarnessApproval' || node.stepType === 'HARNESS_APPROVAL') && isWaiting(node)
       );
+      const nativeNodes = harnessNodes.length > 0
+        ? harnessNodes
+        : waiting(node =>
+          !!node.stepType?.includes('Approval') &&
+          node.stepType !== 'JiraApproval' &&
+          node.stepType !== 'ServiceNowApproval' &&
+          isWaiting(node)
+        );
 
-      // Check for Jira approval
-      const jiraApprovalNode = allNodes.find(
-        n => n.stepType === 'JiraApproval' && /waiting|running/i.test(n.status)
-      );
+      const approvals = await Promise.all(nativeNodes.map(async ({ nodeId, node }) => {
+        const spec = (node.stepParameters?.spec ?? {}) as {
+          approvers?: {
+            users?: Array<{ uuid?: string; email?: string; name?: string }>;
+            userGroups?: string[];
+            minimumCount?: number;
+          };
+        };
+        const rawUsers = spec.approvers?.users ?? [];
+        const rawGroups = spec.approvers?.userGroups ?? [];
+        const canApprove = await canCurrentUserApprove(config, rawUsers, rawGroups).catch(() => null);
+        return {
+          nodeId,
+          approvalInstanceId: approvalInstanceIdFromNode(node),
+          approvers: rawUsers.map(user => user.name ?? user.email ?? '').filter(Boolean),
+          userGroups: rawGroups.map(formatUserGroupLabel),
+          minimumCount: spec.approvers?.minimumCount ?? 1,
+          canApprove: canApprove ?? true,
+          stageIdentifier: stageIdFromBaseFqn(node.baseFqn),
+        };
+      }));
 
-      // Check for ServiceNow approval
-      const serviceNowApprovalNode = allNodes.find(
-        n => n.stepType === 'ServiceNowApproval' && /waiting|running/i.test(n.status)
-      );
+      logger.debug('Harness', 'Sending APPROVAL_UPDATE to webview:', {
+        planExecutionId,
+        nodes: approvals.map(approval => approval.nodeId),
+      });
+      webview.send({ type: 'APPROVAL_UPDATE', planExecutionId, approvals });
 
-      // Generic fallback: any step with "Approval" in stepType and waiting status
-      const genericApprovalNode = !harnessApprovalNode && !jiraApprovalNode && !serviceNowApprovalNode
-        ? allNodes.find(n => n.stepType?.includes('Approval') && /waiting|running/i.test(n.status))
-        : undefined;
-
-      if (harnessApprovalNode || genericApprovalNode) {
-        const n = (harnessApprovalNode || genericApprovalNode) as any;
-
-        logger.debug('Harness', 'Found approval node:', {
-          name: n.name,
-          stepType: n.stepType,
-          status: n.status,
-          baseFqn: n.baseFqn,
-          hasSpec: !!n.stepParameters?.spec
-        });
-
-        // Display info is embedded in stepParameters
-        const spec = n?.stepParameters?.spec ?? {};
-        const rawUsers: Array<{ uuid?: string; email?: string }> = spec?.approvers?.users ?? [];
-        const rawGroups: string[] = spec?.approvers?.userGroups ?? [];
-        const userGroups: string[] = rawGroups.map((g: string) => g.replace(/^_project_/, '').replace(/_/g, ' '));
-        const approvers: string[]  = rawUsers.map((u: any) => u.name ?? u.email ?? u).filter(Boolean);
-        const minimumCount: number = spec?.approvers?.minimumCount ?? 1;
-
-        // Stage id from either legacy `.spec.execution.steps` or v1 `.steps` FQNs.
-        const stageIdentifier = stageIdFromBaseFqn(n.baseFqn);
-
-        logger.debug('Harness', 'Approval details:', {
-          stageIdentifier,
-          approvers,
-          userGroups,
-          minimumCount
-        });
-
-        // Check if the current user is allowed to approve
-        const canApprove = await canCurrentUserApprove(config, rawUsers, rawGroups)
-          .catch(() => null); // null = unknown → webview defaults to showing buttons
-
-        logger.debug('Harness', 'Sending APPROVAL_UPDATE to webview:', {
-          planExecutionId,
-          stageIdentifier,
-          canApprove
-        });
-
-        webview.send({
-          type: 'APPROVAL_UPDATE',
-          planExecutionId,
-          approvers,
-          userGroups,
-          minimumCount,
-          deadline: undefined,
-          canApprove: canApprove ?? true, // default to showing buttons when undetermined
-          stageIdentifier, // Include stage identifier so webview knows where to render the card
-        });
-      } else if (jiraApprovalNode) {
-        const n = jiraApprovalNode as any;
-        const spec = n?.stepParameters?.spec ?? {};
-
-        // Extract Jira ticket information
-        const issueKey = spec?.issueKey ?? '';
-        const projectKey = spec?.projectKey ?? '';
-        const issueType = spec?.issueType ?? '';
-        const approvalCriteria = spec?.approvalCriteria?.criteriaSpec?.conditions ?? [];
-        const rejectionCriteria = spec?.rejectionCriteria?.criteriaSpec?.conditions ?? [];
-
-        const stageIdentifier = stageIdFromBaseFqn(n.baseFqn);
-
-        // Try to construct Jira URL - this may need connector lookup for the actual Jira instance URL
-        // For now, we'll send the issue key and let the webview handle it
-        const jiraUrl = issueKey ? `https://harness.atlassian.net/browse/${issueKey}` : undefined;
-
-        webview.send({
-          type: 'EXTERNAL_APPROVAL_UPDATE',
-          planExecutionId,
-          approvalType: 'Jira',
-          ticketId: issueKey,
-          ticketUrl: jiraUrl,
-          projectKey,
-          issueType,
-          approvalCriteria: approvalCriteria.map((c: any) => `${c.key} ${c.operator} ${c.value}`).join(', '),
-          rejectionCriteria: rejectionCriteria.map((c: any) => `${c.key} ${c.operator} ${c.value}`).join(', '),
-          stageIdentifier,
-        });
-      } else if (serviceNowApprovalNode) {
-        const n = serviceNowApprovalNode as any;
-        const spec = n?.stepParameters?.spec ?? {};
-
-        // Extract ServiceNow ticket information
-        const ticketNumber = spec?.ticketNumber ?? spec?.issueNumber ?? '';
-        const ticketType = spec?.ticketType ?? '';
-        const approvalCriteria = spec?.approvalCriteria?.criteriaSpec?.conditions ?? [];
-        const rejectionCriteria = spec?.rejectionCriteria?.criteriaSpec?.conditions ?? [];
-
-        const stageIdentifier = stageIdFromBaseFqn(n.baseFqn);
-
-        // ServiceNow URL would need connector lookup for the instance URL
-        const serviceNowUrl = ticketNumber ? `https://instance.service-now.com/nav_to.do?uri=${ticketType}/${ticketNumber}` : undefined;
-
-        webview.send({
-          type: 'EXTERNAL_APPROVAL_UPDATE',
-          planExecutionId,
-          approvalType: 'ServiceNow',
-          ticketId: ticketNumber,
-          ticketUrl: serviceNowUrl,
-          ticketType,
-          approvalCriteria: approvalCriteria.map((c: any) => `${c.key} ${c.operator} ${c.value}`).join(', '),
-          rejectionCriteria: rejectionCriteria.map((c: any) => `${c.key} ${c.operator} ${c.value}`).join(', '),
-          stageIdentifier,
-        });
-      } else {
-        logger.debug('Harness', 'No approval node found matching criteria');
-      }
+      const external = [
+        ...waiting(node => node.stepType === 'JiraApproval' && isWaiting(node)).map(({ nodeId, node }) => {
+          const spec = (node.stepParameters?.spec ?? {}) as Record<string, any>;
+          const issueKey = spec.issueKey ?? '';
+          return {
+            nodeId,
+            approvalType: 'Jira' as const,
+            ticketId: issueKey,
+            ticketUrl: issueKey ? `https://harness.atlassian.net/browse/${issueKey}` : undefined,
+            projectKey: spec.projectKey ?? '',
+            issueType: spec.issueType ?? '',
+            approvalCriteria: criteriaText(spec.approvalCriteria),
+            rejectionCriteria: criteriaText(spec.rejectionCriteria),
+            stageIdentifier: stageIdFromBaseFqn(node.baseFqn),
+          };
+        }),
+        ...waiting(node => node.stepType === 'ServiceNowApproval' && isWaiting(node)).map(({ nodeId, node }) => {
+          const spec = (node.stepParameters?.spec ?? {}) as Record<string, any>;
+          const ticketNumber = spec.ticketNumber ?? spec.issueNumber ?? '';
+          const ticketType = spec.ticketType ?? '';
+          return {
+            nodeId,
+            approvalType: 'ServiceNow' as const,
+            ticketId: ticketNumber,
+            ticketUrl: ticketNumber ? `https://instance.service-now.com/nav_to.do?uri=${ticketType}/${ticketNumber}` : undefined,
+            ticketType,
+            approvalCriteria: criteriaText(spec.approvalCriteria),
+            rejectionCriteria: criteriaText(spec.rejectionCriteria),
+            stageIdentifier: stageIdFromBaseFqn(node.baseFqn),
+          };
+        }),
+      ];
+      webview.send({ type: 'EXTERNAL_APPROVAL_UPDATE', planExecutionId, approvals: external });
     } catch (e) {
       logger.error('Harness', 'Approval dispatch error:', e);
     }

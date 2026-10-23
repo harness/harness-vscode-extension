@@ -4,6 +4,7 @@ const { spawnSync } = require('child_process');
 const tests = [
   ['src/pipeline/executionModel.test.ts', 'dist/executionModel.test.js'],
   ['src/api/completedLogs.test.ts', 'dist/completedLogs.test.js'],
+  ['src/api/approvals.test.ts', 'dist/approvals.test.js'],
 ];
 
 for (const [entry, outfile] of tests) {

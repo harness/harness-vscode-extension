@@ -1,5 +1,6 @@
 import { HarnessConfig } from '../config/configManager';
 import { logger } from '../utils/logger';
+import { userGroupMemberUrl } from './userGroups';
 
 export interface HarnessCurrentUser {
   uuid: string;
@@ -57,11 +58,8 @@ export async function getCurrentUser(config: HarnessConfig): Promise<HarnessCurr
  * Checks if a user is a member of a specific group.
  * GET /ng/api/user-groups/{groupId}/member/{userIdentifier}
  *
- * Harness group identifiers are prefixed with their scope:
- *   account.<id>  → account-scoped  (no org/project in query)
- *   org.<id>      → org-scoped      (account + org)
- *   _project_<id> → project-scoped  (account + org + project)
- *   <id>          → project-scoped  (default)
+ * Scope comes from an `account.` or `org.` prefix. Built-in project groups such
+ * as `_project_all_users` use that string as their identifier.
  */
 async function isUserInGroup(
   config: HarnessConfig,
@@ -69,23 +67,14 @@ async function isUserInGroup(
   userUuid: string
 ): Promise<boolean> {
   try {
-    let groupId = rawGroupId;
-    const qs: Record<string, string> = { accountIdentifier: config.accountIdentifier };
-
-    if (rawGroupId.startsWith('account.')) {
-      groupId = rawGroupId.slice('account.'.length);
-      // account-scoped: no org/project params
-    } else if (rawGroupId.startsWith('org.')) {
-      groupId = rawGroupId.slice('org.'.length);
-      qs.orgIdentifier = config.orgIdentifier;
-    } else {
-      // project-scoped (with or without _project_ prefix)
-      groupId = rawGroupId.replace(/^_project_/, '');
-      qs.orgIdentifier     = config.orgIdentifier;
-      qs.projectIdentifier = config.projectIdentifier;
-    }
-
-    const url = `${config.baseUrl}/ng/api/user-groups/${encodeURIComponent(groupId)}/member/${encodeURIComponent(userUuid)}?${new URLSearchParams(qs)}`;
+    const url = userGroupMemberUrl(
+      config.baseUrl,
+      config.accountIdentifier,
+      config.orgIdentifier,
+      config.projectIdentifier,
+      rawGroupId,
+      userUuid,
+    );
     logger.debug('UserService', 'isUserInGroup →', url);
 
     // Add timeout to prevent hanging

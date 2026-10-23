@@ -262,7 +262,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const planExecutionId = (m as any).planExecutionId as string;
       const action = m.action === 'REJECT' ? 'REJECT' : 'APPROVE';
       try {
-        await submitApproval(currentConfig, planExecutionId, action, m.comments);
+        await submitApproval(currentConfig, planExecutionId, action, {
+          comments: m.comments,
+          nodeExecutionId: (m as any).nodeId as string | undefined,
+          approvalInstanceId: (m as any).approvalInstanceId as string | undefined,
+        });
         const actionPastTense = action === 'REJECT' ? 'rejected' : 'approved';
         vscode.window.showInformationMessage(`Harness: Approval ${actionPastTense} successfully.`);
         poller?.refresh();
