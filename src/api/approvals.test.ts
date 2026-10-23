@@ -18,13 +18,13 @@ describe('user group scope', () => {
     const url = userGroupMemberUrl(
       'https://app.harness.io',
       'acct',
-      'sandbox',
-      'luisredda',
+      'org',
+      'proj',
       '_project_all_users',
       'user-1',
     );
     assert.match(url, /\/user-groups\/_project_all_users\/member\/user-1/);
-    assert.match(url, /projectIdentifier=luisredda/);
+    assert.match(url, /projectIdentifier=proj/);
     assert.equal(formatUserGroupLabel('_project_all_users'), 'All Project Users');
   });
 
@@ -40,8 +40,8 @@ describe('user group scope', () => {
     const accountUrl = userGroupMemberUrl(
       'https://app.harness.io/',
       'acct',
-      'sandbox',
-      'luisredda',
+      'org',
+      'proj',
       'account.AccountAdmin',
       'user-1',
     );
@@ -77,8 +77,8 @@ describe('approval instance selection', () => {
 
   it('builds the instance lookup and activity urls', () => {
     assert.equal(
-      approvalInstancesUrl('https://app.harness.io/', 'sandbox', 'luisredda', 'exec/1', 'node 1'),
-      'https://app.harness.io/gateway/pipeline/api/v1/orgs/sandbox/projects/luisredda/approvals/execution/exec%2F1?approval_status=WAITING&approval_type=HarnessApproval&node_execution_id=node+1',
+      approvalInstancesUrl('https://app.harness.io/', 'org', 'proj', 'exec/1', 'node 1'),
+      'https://app.harness.io/gateway/pipeline/api/v1/orgs/org/projects/proj/approvals/execution/exec%2F1?approval_status=WAITING&approval_type=HarnessApproval&node_execution_id=node+1',
     );
     assert.equal(
       approvalActivityUrl('https://app.harness.io', 'inst-1', 'acct'),
