@@ -18,8 +18,9 @@ import { dispatchModules } from './pipeline/executionDispatcher';
 import { resolveLogUnits, type GraphNodeLike, type LogUnit } from './pipeline/executionModel';
 import { initFmeClient, destroyFmeClient, getLogViewerVariation } from './fme/fmeClient';
 import { LogContentProvider, LOG_SCHEME } from './logs/logContentProvider';
-import { openLogAsEditorTab } from './logs/logEditorTab';
+import { openLogAsEditorTab, formatContent as formatLogContent, stepKey as logStepKey, type StepLogInfo } from './logs/logEditorTab';
 import { openAgentChatTab, isAgentLog } from './logs/agentChatTab';
+import { ActiveLogStreams } from './logs/activeLogStreams';
 import { openAidaChatPanel, registerAidaChatPanelSerializer, updateActiveChatContext, updateActiveChatTheme, type IntelligenceChatContext } from './ai/aidaChatPanel';
 import { AidaAvailability } from './ai/aidaAvailability';
 import { detectAITools } from './ai/detector';
@@ -29,6 +30,50 @@ import { launchAI } from './ai/launcher';
 import { migrateAiSettings, readAiDestination, readPreferredExternalToolId, setAiDestination, setPreferredExternalTool } from './ai/aiSettings';
 import { logger } from './utils/logger';
 import { configureProxy, registerProxyConfigWatcher } from './utils/proxy';
+
+// Live log tailing (phase 2). One tail per step node; the extension does not
+// keep a stream open indefinitely — see reconcileLogStreams() and ACTIVE_LOG_STATUSES.
+const activeLogStreams = new ActiveLogStreams();
+const liveEditorLogs = new Map<string, { info: Omit<StepLogInfo, 'logLines'>; lines: string[]; keyWithExt: string }>();
+const ACTIVE_LOG_STATUSES = new Set(['RUNNING', 'ASYNC_WAITING', 'TASK_WAITING']);
+const TERMINAL_LOG_STATUSES = new Set(['SUCCESS', 'FAILED', 'ABORTED', 'EXPIRED', 'IGNOREFAILED', 'SKIPPED', 'POLICY_EVALUATION_FAILURE']);
+const LOG_STREAM_DRAIN_MS = 5000;
+const logStreamDrainTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function stopLogStream(nodeId: string): void {
+  const timer = logStreamDrainTimers.get(nodeId);
+  if (timer) { clearTimeout(timer); logStreamDrainTimers.delete(nodeId); }
+  activeLogStreams.stop(nodeId);
+  liveEditorLogs.delete(nodeId);
+}
+
+function stopAllLogStreams(): void {
+  for (const timer of logStreamDrainTimers.values()) clearTimeout(timer);
+  logStreamDrainTimers.clear();
+  activeLogStreams.stopAll();
+  liveEditorLogs.clear();
+}
+
+/**
+ * Called on every EXECUTION_UPDATE / HISTORY_DETAIL the host sends. A step
+ * that is streaming and has gone terminal gets a short drain (its tail may
+ * still be flushing) before the connection is closed.
+ */
+function reconcileLogStreams(executionGraph: { nodeMap?: Record<string, { status?: string }> } | null | undefined): void {
+  if (!executionGraph?.nodeMap) return;
+  for (const nodeId of [...logStreamDrainTimers.keys()]) {
+    if (!executionGraph.nodeMap[nodeId]) stopLogStream(nodeId); // node dropped off the graph entirely
+  }
+  for (const nodeId of activeLogStreams.activeNodeIds()) {
+    const status = (executionGraph.nodeMap[nodeId]?.status ?? '').toUpperCase();
+    if (TERMINAL_LOG_STATUSES.has(status) && !logStreamDrainTimers.has(nodeId)) {
+      logStreamDrainTimers.set(nodeId, setTimeout(() => {
+        logStreamDrainTimers.delete(nodeId);
+        stopLogStream(nodeId);
+      }, LOG_STREAM_DRAIN_MS));
+    }
+  }
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const secretStore    = new SecretStore(context.secrets);
@@ -357,6 +402,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.showErrorMessage('Harness: Cannot fetch execution detail');
         return;
       }
+      stopAllLogStreams(); // switching detail executions invalidates any step tails from the previous one
       await fetchExecutionDetail(currentConfig, bridge, diagnostics, m.planExecutionId);
       // Register with poller for continuous updates if execution is running
       if (poller) {
@@ -394,6 +440,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // Clear tracked execution when user navigates away from execution detail
       logger.debug('Extension', 'Clearing tracked execution (user navigated away)');
       currentViewedExecution = null;
+      stopAllLogStreams();
       // Stop polling the detail execution
       if (poller) {
         poller.clearDetailExecution();
@@ -834,9 +881,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         hasGraph: !!message.executionGraph,
       });
       syncChatContext();
+      reconcileLogStreams(message.executionGraph);
     } else if (message.type === 'EXECUTION_UPDATE') {
       const ex = message.execution;
       statusBar.updateFromStatus(ex.status, ex.name ?? ex.pipelineIdentifier ?? 'Pipeline');
+      reconcileLogStreams(message.executionGraph);
       // Track execution being viewed from live mode
       // Don't overwrite history detail executions
       if (currentViewedExecution?.source !== 'history') {
@@ -1561,6 +1610,9 @@ async function fetchStepLogsOnDemand(
       logger.error('Extension', 'Log fetch error:', err);
     }
 
+    const variation = await getLogViewerVariation();
+    const isLiveStep = !!status && ACTIVE_LOG_STATUSES.has(status.toUpperCase());
+
     if (lines.length > 0) {
       // Agent log detection fallback: if logs look like a Harness AI agent run,
       // open the chat viewer even if the webview didn't set isAgent on the step
@@ -1580,8 +1632,6 @@ async function fetchStepLogsOnDemand(
         return;
       }
 
-      // Check FME variation to decide how to display logs
-      const variation = await getLogViewerVariation();
       logger.debug('Extension', `Log viewer variation: ${variation}`, { nodeId });
 
       if (variation === 'expanded' && stepName && stageName) {
@@ -1634,6 +1684,36 @@ async function fetchStepLogsOnDemand(
         nodeId,
       });
     }
+
+    // Phase 2: tail a running step's log key so new lines show up without a
+    // manual retry. Bounded by reconcileLogStreams() — closed shortly after
+    // the step goes terminal, or immediately if the user leaves this execution.
+    if (isLiveStep) {
+      const streamKey = logOptions?.units?.[0]?.key ?? logBaseKey;
+      if (variation === 'expanded' && stepName && stageName) {
+        const keyWithExt = `${logStepKey({
+          stepName, stageName,
+          pipelineName: pipelineName || 'Pipeline',
+          planExecutionId: planExecutionId || '',
+          status: 'RUNNING', logLines: [],
+        })}.log`;
+        liveEditorLogs.set(nodeId, {
+          info: { stepName, stageName, pipelineName: pipelineName || 'Pipeline', planExecutionId: planExecutionId || '', status: 'RUNNING', durationMs },
+          lines: [...lines],
+          keyWithExt,
+        });
+        activeLogStreams.start(nodeId, config, streamKey, (batch) => {
+          const entry = liveEditorLogs.get(nodeId);
+          if (!entry) return;
+          entry.lines.push(...batch);
+          logProvider.setLog(entry.keyWithExt, formatLogContent({ ...entry.info, logLines: entry.lines }));
+        });
+      } else {
+        activeLogStreams.start(nodeId, config, streamKey, (batch) => {
+          bridge.send({ type: 'LOG_CHUNK', nodeId, lines: batch });
+        });
+      }
+    }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.error('Extension', 'Fatal error fetching step logs:', { error: msg, nodeId, logBaseKey });
@@ -1648,5 +1728,6 @@ async function fetchStepLogsOnDemand(
 export function deactivate(): void {
   // Cleanup FME client
   destroyFmeClient();
+  stopAllLogStreams();
   // All disposables are registered in context.subscriptions — nothing to do here
 }

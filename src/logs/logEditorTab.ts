@@ -55,7 +55,7 @@ function parseLogLine(rawLine: string, lineNum: number): LogLine {
   };
 }
 
-function formatContent(info: StepLogInfo): string {
+export function formatContent(info: StepLogInfo): string {
   const statusIcon =
     info.status === 'FAILED' ? '✗' :
     info.status === 'SUCCESS' ? '✓' :
@@ -89,7 +89,7 @@ function formatContent(info: StepLogInfo): string {
   return header + body;
 }
 
-function stepKey(info: StepLogInfo): string {
+export function stepKey(info: StepLogInfo): string {
   return `${info.planExecutionId}/${info.stageName}/${info.stepName}`
     .replace(/[^a-zA-Z0-9/_-]/g, '-')
     .toLowerCase();
