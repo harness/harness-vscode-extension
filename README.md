@@ -14,8 +14,8 @@ Bring Harness directly into VS Code and Cursor. See real-time pipeline status, d
 ### 🚀 **Real-time Pipeline Monitoring**
 Watch your pipelines run with live status updates. Automatic git context detection shows executions for your current branch and commit.
 
-### 📝 **Syntax-Highlighted Logs**
-Click any step to open its logs in a dedicated editor tab with full syntax highlighting. Failed steps are instantly highlighted for quick debugging.
+### 📝 **Live, Syntax-Highlighted Logs**
+Click any step to open its logs in a dedicated editor tab with syntax highlighting. While a step is running, new lines stream into the open tab and it follows the newest line.
 
 ### ✅ **One-Click Approvals**
 Handle Harness native, Jira, and ServiceNow approval gates directly in your editor. Permission checks happen automatically.
@@ -111,10 +111,10 @@ Browse full execution history:
 The extension automatically detects your current git branch and commit, showing the matching pipeline execution. Live updates every 10 seconds during active runs.
 
 **Debug with Logs**
-Click any step to open its logs in a new editor tab with syntax highlighting. Failed steps are highlighted in red for quick identification.
+Click any step to open its logs in a new editor tab with syntax highlighting. A running step streams new lines live; the header switches to the final status and duration when it finishes.
 
 **Handle Approvals**
-When a pipeline reaches an approval step, **✓ Approve** and **✕ Reject** buttons appear inline. The extension automatically checks if you have permission to approve.
+When a pipeline reaches an approval step, **✓ Approve** and **✕ Reject** buttons appear inline on that step. The extension automatically checks if you have permission to approve. When several approvals wait at once, each step shows its own approvers and approves only its own instance.
 
 Supported approval types:
 - Harness native approvals (user/group permissions)
@@ -156,15 +156,15 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 
 ### Supported AI Tools
 
-**Claude Code** (CLI or Extension)
+**Claude Code** (Terminal or Extension)
 - Install from [claude.ai/code](https://claude.ai/code)
-- **CLI mode**: Opens Claude Code in the integrated terminal with a structured prompt, so you can continue the conversation there
-- **Extension mode**: Semi-automated — auto-opens Claude Code panel with prompt ready
+- **Terminal mode**: Opens Claude Code in the integrated terminal with a structured prompt, so you can continue the conversation there
+- **Extension mode**: Opens the Claude Code panel with the prompt already in the input
 - Uses local MCP server configuration (`~/.claude.json`)
 
 **GitHub Copilot**
 - Auto-detected in VS Code when GitHub Copilot extension is installed
-- Opens Copilot Chat with auto-paste integration
+- Opens Copilot Chat in agent mode with the prompt already in the input
 - MCP configuration uses VS Code-specific paths (`.vscode/mcp.json` for project scope)
 - Inherits environment variables from VS Code process when using env var auth
 
@@ -172,12 +172,12 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 - Auto-detected when running in Cursor editor
 - **Recommended**: Install [Harness Cursor Plugin](https://cursor.com/marketplace/harness) — OAuth authentication, zero config
 - **Fallback**: Local MCP configuration (harness-mcp-v2) for advanced users
-- Seamless prompt delivery with auto-paste
+- Opens Cursor chat with the prompt already in the input
 
 ### Setup
 
 **For Claude Code:**
-1. Install Claude Code (CLI or VS Code Extension)
+1. Install Claude Code (Terminal or VS Code Extension)
 2. Click **Configure MCP** in the AI footer
 3. Choose scope (Project or Global):
    - **Project**: `.mcp.json` in workspace root — shared with team if committed
@@ -210,7 +210,7 @@ Ask questions about your pipelines using **Claude Code**, **GitHub Copilot**, or
 - Click the **⌄** chevron next to **Ask Harness AI** to switch to Claude Code, Copilot, or Cursor
 - Or type your question in the AI footer when an external tool is selected
 - Destination and preferred external tool persist across VS Code sessions
-- Claude Code CLI opens an interactive integrated terminal; editor-based tools open their existing chat surface
+- Claude Code Terminal opens an interactive integrated terminal; editor-based tools open their existing chat with the prompt filled in
 - Pipeline context automatically included in every query
 
 **What context gets sent:**
@@ -267,7 +267,7 @@ Your Personal Access Token is stored securely in VS Code's secret storage.
 
 ### AI Tools
 
-- `harness.ai.preferredExternalTool` — External tool used when the destination is External (`auto`, Claude Code CLI, Claude Code extension, Cursor, Copilot, or Kiro). Harness AI is chosen with `harness.ai.defaultDestination`. The sidebar picker writes this setting.
+- `harness.ai.preferredExternalTool` — External tool used when the destination is External (`auto`, Claude Code Terminal, Claude Code extension, Cursor, Copilot, or Kiro). Harness AI is chosen with `harness.ai.defaultDestination`. The sidebar picker writes this setting.
 - `harness.ai.defaultDestination` — Send questions to Harness AI (`harness`) or the selected external tool (`external`)
 
 ### Per-Workspace Override

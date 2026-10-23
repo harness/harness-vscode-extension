@@ -1,6 +1,6 @@
 # Harness VS Code Extension — Context & Requirements
 
-> Last updated: 2026-06-23
+> Last updated: 2026-10-23
 
 ---
 
@@ -25,8 +25,12 @@ A VS Code sidebar extension that surfaces Harness pipeline execution (CI, CD, ST
 | `src/auth/onboarding.ts` | 2-phase onboarding: global (PAT+AccountID) → workspace (Org/Project); env var flow |
 | `src/auth/envCredentials.ts` | Reads HARNESS_* environment variables for passwordless auth |
 | `src/api/harnessClient.ts` | Typed fetch wrapper, injects auth headers |
-| `src/api/logService.ts` | Log fetch (blob/download + stream fallback), ZIP parsing |
-| `src/api/approvalService.ts` | Submits approve/reject via API |
+| `src/api/logService.ts` | Completed-step log entry point; legacy ZIP download + one-shot stream fallbacks |
+| `src/api/completedLogs.ts` | Gateway raw blob fetch per log unit (`GET /gateway/log-service/blob`), retries a just-finished step |
+| `src/api/logStream.ts` | Live SSE tail (`GET /gateway/log-service/stream`) for a running step |
+| `src/api/approvalService.ts` | Resolves the waiting approval instance for a step, then approves/rejects that instance |
+| `src/api/approvalInstances.ts` | Approval instance lookup + activity URLs; refuses an ambiguous instance list |
+| `src/api/userGroups.ts` | Approver group scope parsing (`account.` / `org.` prefixes) and display labels for built-in groups |
 | `src/api/rerunService.ts` | Re-runs a pipeline via the retry API (inputSet YAML + first-stage `retryStages` + `runAllStages`) |
 | `src/api/abortService.ts` | Aborts a running execution via interrupt API (`AbortAll` / `UserMarkedFailure`) |
 | `src/api/stoScan.ts` | Parses STO scanner vulnerability counts from the execution graph (no API call) |
@@ -35,12 +39,16 @@ A VS Code sidebar extension that surfaces Harness pipeline execution (CI, CD, ST
 | `src/ai/aidaAvailability.ts` | Admin gate for native Harness AI (`aida` setting): fail-closed, background retry with backoff, `AIDA_STATUS` to webview |
 | `src/pipeline/pipelinePoller.ts` | Polls for pipeline execution updates; pauses when sidebar hidden/window unfocused |
 | `src/pipeline/executionDispatcher.ts` | Fan-out to CI/CD/STO/TI/SSCA/OPA/CCM/AIDA/Approval modules |
+| `src/pipeline/executionModel.ts` | Pipeline format detection (legacy v0 vs Harness 3.0 v1), stage/step tree walk, ordered log units per step |
 | `src/ui/sidebarProvider.ts` | `WebviewViewProvider` — injects HTML, tracks visibility |
 | `src/ui/webviewBridge.ts` | Typed message bus between extension host and webview |
 | `src/ui/webview/main.ts` | All webview rendering (browser context, no vscode APIs) |
 | `src/ui/webview/styles.css` | Dual-theme styles (simple + enhanced OKLCH) |
 | `src/fme/fmeClient.ts` | Harness Feature Management Engine (FME) client using Split.io SDK |
 | `src/logs/logEditorTab.ts` | Opens step logs in editor tabs with syntax highlighting |
+| `src/logs/logFormat.ts` | Log tab text: header, original lines, real timestamps moved to the front |
+| `src/logs/logContentProvider.ts` | `harness-log:` document content; refreshes and follows the open tab |
+| `src/logs/activeLogStreams.ts` | One live tail per step node; stops on terminal status or navigation |
 | `src/ai/detector.ts` | Detects Claude Code CLI/Extension/Cursor/Copilot/Kiro and checks MCP configuration |
 | `src/ai/mcpConfigurer.ts` | Writes Harness MCP server config to `~/.claude.json`, Cursor, Copilot, and Kiro MCP configs |
 | `src/ai/launcher.ts` | Launches Claude Code in the integrated terminal, or Claude Code Extension, Cursor, Copilot, or Kiro |
@@ -70,17 +78,31 @@ git branch + SHA
 
 ## Log Fetching
 
-Two-approach strategy in `src/api/logService.ts`:
+Follows the Harness CLI (`pkg/logstream`). A step's log units come from
+`executableResponses[0].logKeys` (with `units` labels), falling back to
+`logBaseKey` (`resolveLogUnits` in `executionModel.ts`).
 
-1. **Blob/download** (preferred): `POST /gateway/log-service/blob/download` → signed URL → ZIP download → parse NDJSON
-   - Requires FF `SPG_LOG_SERVICE_ENABLE_DOWNLOAD_LOGS`
-   
-2. **Stream** (fallback): `GET /log-service/stream` with log-service token
-   - Token fetched via `GET /log-service/token` with PAT
+### Completed steps (`src/api/completedLogs.ts`)
+- `GET /gateway/log-service/blob?accountID=…&key=<unit key>` per unit, header `x-api-key`. Units are joined; several units get `== <unit> ==` separators.
+- An empty blob is retried (3×, 2s apart) only when the step ended in the last 60s.
+- Fallback per unit (`logService.ts`): `POST /gateway/log-service/blob/download` → signed ZIP (needs FF `SPG_LOG_SERVICE_ENABLE_DOWNLOAD_LOGS`), then `GET /log-service/stream` with a token from `GET /log-service/token`.
+
+### Running steps (`src/api/logStream.ts`, `src/logs/activeLogStreams.ts`)
+- Live when the step status is `Running`, `AsyncWaiting` or `TaskWaiting`. Compare statuses with letters only (`normalizeStatus` in `extension.ts`): they arrive as `AsyncWaiting`, `ASYNCWAITING` or `ASYNC_WAITING`.
+- After the initial blob snapshot: `GET /gateway/log-service/stream?accountID=…&key=<first unit key>`, headers `x-api-key`, **`Harness-Account`**, `Accept: text/event-stream`. Without `Harness-Account` the stream returns 200 but never sends an event.
+- SSE frames: `data:` carries a log envelope (`out` / `args` / `message`); `event: error` + `data: eof` ends the stream.
+- The stream replays the step from its first line, so its first batch replaces the snapshot instead of appending.
+- `reconcileLogStreams()` runs on every `EXECUTION_UPDATE` / `HISTORY_DETAIL`. A tailed step that turns terminal updates the tab header (status, duration) and is closed after a 5s drain. All tails stop when the viewed execution changes and on deactivate.
+- Steps already finished are never streamed.
+
+### Log tab (`expanded` mode)
+- `harness-log:/<key>.log`. The whole key lives in the URI **path**. `logUri()` builds the URI for both opening and change events; a mismatched URI (for example `harness-log://<key>`, which puts the first segment in the authority) never refreshes the open tab.
+- Body is the original line (`logFormat.ts`). No invented line numbers (the editor has them), clock, or level. A leading timestamp, or a trailing `at HH:MM:SS`, moves to the front; a leading level token (`INFO`, `[ERROR]`, …) is kept.
+- A running step opens on its newest line and follows new lines while the viewport is at the bottom. Header shows `RUNNING · live` until the step finishes.
 
 **Log viewer modes** (FME flag `vscode-log-experience`):
-- `inline` — Logs in sidebar tree
-- `expanded` (default) — Logs open in editor tab with syntax highlighting (`harness-log://` URI scheme)
+- `inline` — Logs in sidebar tree (`LOG_CHUNK`; the live tail's first batch is sent with `replace: true`)
+- `expanded` (default) — Logs open in an editor tab with syntax highlighting (`harness-log:` URI scheme)
 
 ---
 
@@ -92,15 +114,15 @@ Two-approach strategy in `src/api/logService.ts`:
 - `HISTORY_DETAIL` — Full execution detail for history view
 - `LOG_CHUNK` — Step logs (lines array)
 - `GIT_CONTEXT` — Git branch/SHA, org/project, FME variations
-- `APPROVAL_UPDATE` — Harness native approval
-- `EXTERNAL_APPROVAL_UPDATE` — Jira/ServiceNow approval
+- `APPROVAL_UPDATE` — `{ planExecutionId, approvals: [{ nodeId, approvalInstanceId, approvers, userGroups, minimumCount, canApprove, stageIdentifier }] }`, one entry per waiting Harness approval step
+- `EXTERNAL_APPROVAL_UPDATE` — `{ planExecutionId, approvals: [...] }` for Jira/ServiceNow steps
 - `STEP_LOGS_OPENED_IN_TAB` — Log opened in editor (not inline)
 - `RERUN_SUCCESS` / `RERUN_CANCELLED` / `RERUN_ERROR` — Re-run outcome (success carries `newPlanExecutionId`)
 - `ABORT_SUCCESS` / `ABORT_CANCELLED` / `ABORT_ERROR` — Abort outcome
 - `STO_SCAN` — Security tab scan summary (parsed from execution graph)
 
 **Webview → Host:**
-- `approval` — Approve/reject action
+- `approval` — Approve/reject action (carries `planExecutionId`, `nodeId`, `approvalInstanceId`, `action`)
 - `fetchStepLogs` — Request logs for a specific step
 - `fetchExecutionDetail` — Load detail view for history execution
 - `fetchHistory` — Request execution history page
@@ -208,10 +230,13 @@ FME flag `vscode-bar-experience`:
 ## Approval Flow
 
 ### Harness Native
-- Detects `HarnessApproval` step in `executionGraph`
-- Checks user permissions via `GET /ng/api/user-groups/{id}/member/{uuid}`
-- Renders approval card inline with Approve/Reject buttons
-- POST to `/gateway/pipeline/api/v1/orgs/{org}/projects/{project}/approvals/execution/{id}`
+- Detects every waiting `HarnessApproval` step in `executionGraph`; each card is keyed by its step `nodeId`, so two approval steps no longer share one card or one group list
+- Checks user permissions via `GET /ng/api/user-groups/{id}/member/{uuid}` (`userGroupMemberUrl`). Only `account.` and `org.` are scope prefixes; built-ins such as `_project_all_users` are literal identifiers, shown as "All Project Users"
+- Renders the approval card on its own step with Approve/Reject buttons
+- Approve/reject a specific instance:
+  1. Instance id from the graph node (`outcomes.*.approvalInstanceId`), else `GET /gateway/pipeline/api/v1/orgs/{org}/projects/{project}/approvals/execution/{execId}?approval_status=WAITING&approval_type=HarnessApproval&node_execution_id={nodeId}`
+  2. `POST /gateway/pipeline/api/approvals/{approvalInstanceId}/harness/activity?accountIdentifier=…` with `{ action, comments, approverInputs }`
+- The execution-wide approve call is not used: it fails with HTTP 400 ("Found more than 1 Harness Approval Instance waiting") when several approvals wait at once
 
 ### External (Jira/ServiceNow)
 - Detects `JiraApproval` or `ServiceNowApproval` step
@@ -249,18 +274,19 @@ A single action button on each execution card swaps based on status:
 Supports **Claude Code** (CLI/Extension), **Cursor AI**, **GitHub Copilot**, and **Kiro** with automatic context injection via MCP.
 
 ### Claude Code
-- **CLI mode**: Opens Claude Code in the integrated terminal with a structured prompt. The conversation continues in that terminal. Claude discovers MCP from its normal startup (`.mcp.json` / `~/.claude.json`).
-- **Extension mode**: Semi-automated (auto-opens panel, auto-pastes prompt)
+- **Terminal mode** (`claudecode-cli`, labeled "Terminal" in the picker): Opens Claude Code in the integrated terminal with a structured prompt. The conversation continues in that terminal. Claude discovers MCP from its normal startup (`.mcp.json` / `~/.claude.json`).
+- **Extension mode**: `claude-vscode.editor.open` with the prompt filled in; clipboard paste only as a fallback
 - MCP config written to `~/.claude.json`
 
 ### Cursor AI
 - Auto-detected when running in Cursor editor (`vscode.env.appName.includes('cursor')`)
+- Opens Cursor chat with the prompt filled in (`workbench.action.chat.open` with the prompt); clipboard paste only as a fallback
 - **Recommended**: Install [Harness Cursor Plugin](https://cursor.com/plugins) — OAuth, zero config
 - **Fallback**: Local MCP configuration (harness-mcp-v2)
 
 ### GitHub Copilot
 - Auto-detected via VS Code extensions API (only in VS Code, not Cursor)
-- Opens Copilot Chat and auto-pastes prompt
+- Opens Copilot Chat in agent mode with the prompt filled in (`workbench.action.chat.open` with `{ query, isPartialQuery: true, mode: 'agent' }`); clipboard paste only as a fallback
 - Uses `"servers"` key in MCP config (Copilot-specific format)
 - Environment variable inheritance: When using env var auth, only org/project IDs in config (credentials inherited from VS Code process)
 
@@ -510,6 +536,7 @@ logger.error('Component', 'Operation failed:', error);
 ```bash
 npm install
 npm run compile      # esbuild → dist/
+npm test             # bundles the unit tests listed in scripts/run-tests.js, runs node --test
 
 # Run in VS Code: F5 → Extension Development Host
 # Package: npm run package → harness-vscode-0.x.x.vsix
