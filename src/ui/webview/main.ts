@@ -1591,7 +1591,7 @@ function pinFooter(): string {
 
 // Tool metadata
 const AI_TOOL_META: Record<string, { name: string; sub: string | null }> = {
-  'claudecode-cli': { name: 'Claude Code', sub: 'CLI' },
+  'claudecode-cli': { name: 'Claude Code', sub: 'Terminal' },
   'claudecode-ext': { name: 'Claude Code', sub: 'Extension' },
   'cursor': { name: 'Cursor', sub: null },
   'copilot': { name: 'GitHub Copilot', sub: null },

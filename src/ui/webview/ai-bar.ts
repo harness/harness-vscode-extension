@@ -42,7 +42,7 @@ const aiState: AIState = {
 
 // Tool metadata
 const TOOL_META: Record<string, { name: string; sub: string | null }> = {
-  'claudecode-cli': { name: 'Claude Code', sub: 'CLI' },
+  'claudecode-cli': { name: 'Claude Code', sub: 'Terminal' },
   'claudecode-ext': { name: 'Claude Code', sub: 'Extension' },
 };
 
@@ -183,7 +183,7 @@ function renderToolPicker(): string {
     ${items}
     <div class="aix-picker-foot">
       <span class="aix-picker-foot-k">Priority</span>
-      <span class="aix-picker-foot-v mono">CLI › Extension</span>
+      <span class="aix-picker-foot-v mono">Terminal › Extension</span>
     </div>
   </div>`;
 }

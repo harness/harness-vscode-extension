@@ -282,7 +282,7 @@
             ],
             "enumDescriptions": [
               "Use the first detected tool",
-              "Claude Code CLI in the integrated terminal",
+              "Claude Code in the integrated terminal",
               "Claude Code extension",
               "Cursor",
               "GitHub Copilot",
