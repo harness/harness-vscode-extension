@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-10-23
+
+### Added
+- **Live step logs**: Opening a running step streams new lines into the open log tab (or the inline sidebar log) over the log-service SSE stream. The tab follows the newest line while you stay at the bottom, the header reads `RUNNING · live`, and it switches to the final status and duration when the step finishes. Finished steps are fetched once and never streamed
+- **Harness 3.0 (v1) pipelines**: Each execution is checked for the legacy or v1 graph format, so v1 stages and step groups are walked correctly instead of shown as single leaf steps
+- **Nested step groups**: Step groups render as an indented tree with aligned durations
+
+### Changed
+- **Completed step logs** come from the gateway raw blob API, one request per log section, with sections labeled when a step has several. A step that just finished is retried briefly if its log is still empty. The signed ZIP download and the one-shot stream remain as fallbacks
+- **Log tab shows the original line**: no invented line numbers, clock, or `UNKNOWN` level. A real timestamp, including one written as `at 23:10:01` at the end of a line, moves to the front. Only a real leading level (`INFO`, `[ERROR]`, …) is colored, so a sentence containing "failed" no longer turns red
+- **AI handoff fills the chat input directly**: Claude Code Extension, Cursor, and Copilot (agent mode) open with the prompt already in the input. Clipboard paste is only a fallback
+- **Claude Code "CLI" is now labeled "Terminal"** in the AI tool picker and settings
+
+### Fixed
+- **Approvals with built-in groups**: Groups such as `_project_all_users` were checked under the wrong identifier, returning HTTP 400. They now resolve correctly and display as "All Project Users"
+- **Multiple approval steps showed the same approvers**: Each waiting approval now renders on its own step with its own groups
+- **Approving when several approvals wait at once** failed with HTTP 400 ("Found more than 1 Harness Approval Instance waiting"). The extension now resolves and approves the specific approval instance for that step
+- **Open log tabs never refreshed**: change events used a different URI than the open tab, so live updates did not appear
+
 ## [0.1.10] - 2026-10-08
 
 ### Added
