@@ -32,26 +32,50 @@ export function logStreamUrl(config: LogStreamConfig, key: string): string {
   return `${base}/gateway/log-service/stream?${qs.toString()}`;
 }
 
+export interface SseParserState {
+  eventType: string;
+}
+
+export function createSseParserState(): SseParserState {
+  return { eventType: '' };
+}
+
 /**
- * One line of a tailed response. SSE frames carry a `data:` prefix; plain
- * NDJSON streams do not. Both end up parsed through the same
- * {out,args,message} unwrapping used for completed logs.
+ * One line of a tailed response, read like the CLI reads it: `event:` sets
+ * the frame type, `data:` carries a log envelope, and `event: error` /
+ * `data: eof` ends the stream. Plain NDJSON lines (no `data:`) are accepted
+ * too. Envelopes go through the same {out,args,message} unwrapping used for
+ * completed logs.
  */
-function toLogLine(rawLine: string): string | null {
-  const line = rawLine.trim();
-  if (!line || line.startsWith(':') || line.startsWith('event:') || line.startsWith('id:') || line.startsWith('retry:')) {
+function toLogLine(rawLine: string, state: SseParserState): string | null {
+  const line = rawLine.replace(/\r$/, '');
+  if (line === '') {
+    state.eventType = '';
     return null;
   }
-  const payload = line.startsWith('data:') ? line.slice('data:'.length).trim() : line;
+  if (line.startsWith(':') || line.startsWith('id:') || line.startsWith('retry:')) return null;
+  if (line.startsWith('event:')) {
+    state.eventType = line.slice('event:'.length).trim();
+    return null;
+  }
+  if (state.eventType !== '' && state.eventType !== 'message') return null;
+  const payload = line.startsWith('data:') ? line.slice('data:'.length).trim() : line.trim();
   if (!payload) return null;
   return parseLogLines(payload)[0] ?? null;
 }
 
 /** Splits a growing buffer into complete lines plus an unterminated remainder. */
-export function consumeStreamBuffer(buffer: string): { lines: string[]; remainder: string } {
+export function consumeStreamBuffer(
+  buffer: string,
+  state: SseParserState = createSseParserState(),
+): { lines: string[]; remainder: string } {
   const parts = buffer.split('\n');
   const remainder = parts.pop() ?? '';
-  const lines = parts.map(toLogLine).filter((line): line is string => line !== null);
+  const lines: string[] = [];
+  for (const part of parts) {
+    const line = toLogLine(part, state);
+    if (line !== null) lines.push(line);
+  }
   return { lines, remainder };
 }
 
@@ -73,22 +97,31 @@ export function openLogStream(
   (async () => {
     try {
       const res = await fetchImpl(logStreamUrl(config, key), {
-        headers: { 'x-api-key': config.apiKey, 'Accept': 'text/event-stream' },
+        headers: {
+          'x-api-key': config.apiKey,
+          // Without it the stream still returns 200 but never sends an event.
+          'Harness-Account': config.accountIdentifier,
+          'Accept': 'text/event-stream',
+        },
         signal: controller.signal,
       });
-      if (!res.ok || !res.body) return;
+      if (!res.ok || !res.body) {
+        if (!closed) handlers.onError?.(new Error(`HTTP ${res.status}`));
+        return;
+      }
 
       let buffer = '';
+      const state = createSseParserState();
       const body = Readable.fromWeb(res.body as any);
       for await (const chunk of body) {
         if (closed) break;
         buffer += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
-        const { lines, remainder } = consumeStreamBuffer(buffer);
+        const { lines, remainder } = consumeStreamBuffer(buffer, state);
         buffer = remainder;
         if (lines.length > 0) handlers.onLines(lines);
       }
       if (!closed && buffer.trim()) {
-        const { lines } = consumeStreamBuffer(buffer + '\n');
+        const { lines } = consumeStreamBuffer(buffer + '\n', state);
         if (lines.length > 0) handlers.onLines(lines);
       }
     } catch (err) {

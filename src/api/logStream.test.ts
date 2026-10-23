@@ -20,6 +20,11 @@ describe('log stream buffering', () => {
     assert.deepEqual(lines, ['hello']);
   });
 
+  it('ignores the eof frame that ends the stream', () => {
+    const { lines } = consumeStreamBuffer('data: {"out":"last"}\n\nevent: error\ndata: eof\n\n');
+    assert.deepEqual(lines, ['last']);
+  });
+
   it('builds the gateway stream url with the key and account id in the query', () => {
     const url = logStreamUrl(
       { baseUrl: 'https://app.harness.io/', accountIdentifier: 'acct', apiKey: 'pat' },
@@ -63,6 +68,26 @@ describe('log stream tailing', () => {
 
     assert.equal(done, true);
     assert.deepEqual(received.flat(), ['line one', 'line two', 'line three']);
+  });
+
+  it('sends Harness-Account alongside x-api-key, matching every other authed request', async () => {
+    let sentHeaders: Record<string, string> = {};
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      sentHeaders = (init?.headers as Record<string, string>) ?? {};
+      return streamResponse(['data: {"out":"line"}\n']);
+    }) as unknown as typeof fetch;
+
+    await new Promise<void>(resolve => {
+      openLogStream(
+        { baseUrl: 'https://app.harness.io', accountIdentifier: 'acct-123', apiKey: 'pat' },
+        'key',
+        { onLines: () => {}, onDone: resolve },
+        { fetchImpl },
+      );
+    });
+
+    assert.equal(sentHeaders['Harness-Account'], 'acct-123');
+    assert.equal(sentHeaders['x-api-key'], 'pat');
   });
 
   it('stops delivering once close() is called', async () => {

@@ -3,36 +3,47 @@
   "scopeName": "text.harness-log",
   "patterns": [
     {
-      "match": "^.*\\b(ERROR|ERRO|FAIL|FATAL|✗)\\b.*$",
-      "name": "markup.deleted"
-    },
-    {
-      "match": "^.*\\b(WARN|WARNING|⚠)\\b.*$",
-      "name": "markup.changed"
-    },
-    {
-      "match": "^.*\\b(SUCCESS|PASS|DONE|✓)\\b.*$",
-      "name": "markup.inserted"
-    },
-    {
-      "match": "^.*\\bINFO\\b.*$",
-      "name": "comment"
-    },
-    {
-      "match": "^.*\\b(DEBUG|TRACE)\\b.*$",
-      "name": "comment.block"
-    },
-    {
-      "match": "^\\s*\\d+\\s",
-      "name": "constant.numeric"
-    },
-    {
-      "match": "\\d{2}:\\d{2}:\\d{2}",
-      "name": "string"
-    },
-    {
       "match": "^#.*$",
       "name": "comment.line"
+    },
+    {
+      "match": "^(?:(\\d{2}:\\d{2}:\\d{2}) )?(ERROR)\\b",
+      "captures": {
+        "1": { "name": "string" },
+        "2": { "name": "markup.deleted" }
+      }
+    },
+    {
+      "match": "^(?:(\\d{2}:\\d{2}:\\d{2}) )?(WARN)\\b",
+      "captures": {
+        "1": { "name": "string" },
+        "2": { "name": "markup.changed" }
+      }
+    },
+    {
+      "match": "^(?:(\\d{2}:\\d{2}:\\d{2}) )?(SUCCESS)\\b",
+      "captures": {
+        "1": { "name": "string" },
+        "2": { "name": "markup.inserted" }
+      }
+    },
+    {
+      "match": "^(?:(\\d{2}:\\d{2}:\\d{2}) )?(INFO)\\b",
+      "captures": {
+        "1": { "name": "string" },
+        "2": { "name": "comment" }
+      }
+    },
+    {
+      "match": "^(?:(\\d{2}:\\d{2}:\\d{2}) )?(DEBUG)\\b",
+      "captures": {
+        "1": { "name": "string" },
+        "2": { "name": "comment.block" }
+      }
+    },
+    {
+      "match": "^\\d{2}:\\d{2}:\\d{2}\\b",
+      "name": "string"
     }
   ]
 }

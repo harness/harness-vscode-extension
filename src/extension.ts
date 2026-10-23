@@ -19,6 +19,7 @@ import { resolveLogUnits, type GraphNodeLike, type LogUnit } from './pipeline/ex
 import { initFmeClient, destroyFmeClient, getLogViewerVariation } from './fme/fmeClient';
 import { LogContentProvider, LOG_SCHEME } from './logs/logContentProvider';
 import { openLogAsEditorTab, formatContent as formatLogContent, stepKey as logStepKey, type StepLogInfo } from './logs/logEditorTab';
+import { displayStatus } from './logs/logFormat';
 import { openAgentChatTab, isAgentLog } from './logs/agentChatTab';
 import { ActiveLogStreams } from './logs/activeLogStreams';
 import { openAidaChatPanel, registerAidaChatPanelSerializer, updateActiveChatContext, updateActiveChatTheme, type IntelligenceChatContext } from './ai/aidaChatPanel';
@@ -35,8 +36,10 @@ import { configureProxy, registerProxyConfigWatcher } from './utils/proxy';
 // keep a stream open indefinitely — see reconcileLogStreams() and ACTIVE_LOG_STATUSES.
 const activeLogStreams = new ActiveLogStreams();
 const liveEditorLogs = new Map<string, { info: Omit<StepLogInfo, 'logLines'>; lines: string[]; keyWithExt: string }>();
-const ACTIVE_LOG_STATUSES = new Set(['RUNNING', 'ASYNC_WAITING', 'TASK_WAITING']);
-const TERMINAL_LOG_STATUSES = new Set(['SUCCESS', 'FAILED', 'ABORTED', 'EXPIRED', 'IGNOREFAILED', 'SKIPPED', 'POLICY_EVALUATION_FAILURE']);
+// The same status arrives as `AsyncWaiting`, `ASYNCWAITING` or `ASYNC_WAITING`.
+const normalizeStatus = (status?: string) => (status ?? '').toUpperCase().replace(/[^A-Z]/g, '');
+const ACTIVE_LOG_STATUSES = new Set(['RUNNING', 'ASYNCWAITING', 'TASKWAITING']);
+const TERMINAL_LOG_STATUSES = new Set(['SUCCESS', 'FAILED', 'ABORTED', 'EXPIRED', 'IGNOREFAILED', 'SKIPPED', 'POLICYEVALUATIONFAILURE', 'ERRORED']);
 const LOG_STREAM_DRAIN_MS = 5000;
 const logStreamDrainTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -59,14 +62,26 @@ function stopAllLogStreams(): void {
  * that is streaming and has gone terminal gets a short drain (its tail may
  * still be flushing) before the connection is closed.
  */
-function reconcileLogStreams(executionGraph: { nodeMap?: Record<string, { status?: string }> } | null | undefined): void {
+function reconcileLogStreams(
+  executionGraph: { nodeMap?: Record<string, { status?: string; startTs?: number | null; endTs?: number | null }> } | null | undefined,
+  logProvider: LogContentProvider,
+): void {
   if (!executionGraph?.nodeMap) return;
   for (const nodeId of [...logStreamDrainTimers.keys()]) {
     if (!executionGraph.nodeMap[nodeId]) stopLogStream(nodeId); // node dropped off the graph entirely
   }
   for (const nodeId of activeLogStreams.activeNodeIds()) {
-    const status = (executionGraph.nodeMap[nodeId]?.status ?? '').toUpperCase();
+    const node = executionGraph.nodeMap[nodeId];
+    const status = normalizeStatus(node?.status);
     if (TERMINAL_LOG_STATUSES.has(status) && !logStreamDrainTimers.has(nodeId)) {
+      const entry = liveEditorLogs.get(nodeId);
+      if (entry && node) {
+        const durationMs = node.startTs && node.endTs && node.endTs >= node.startTs
+          ? node.endTs - node.startTs
+          : entry.info.durationMs;
+        entry.info = { ...entry.info, status: displayStatus(node.status), durationMs, live: false };
+        logProvider.setLog(entry.keyWithExt, formatLogContent({ ...entry.info, logLines: entry.lines }), { follow: true });
+      }
       logStreamDrainTimers.set(nodeId, setTimeout(() => {
         logStreamDrainTimers.delete(nodeId);
         stopLogStream(nodeId);
@@ -881,11 +896,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         hasGraph: !!message.executionGraph,
       });
       syncChatContext();
-      reconcileLogStreams(message.executionGraph);
+      reconcileLogStreams(message.executionGraph, logProvider);
     } else if (message.type === 'EXECUTION_UPDATE') {
       const ex = message.execution;
       statusBar.updateFromStatus(ex.status, ex.name ?? ex.pipelineIdentifier ?? 'Pipeline');
-      reconcileLogStreams(message.executionGraph);
+      reconcileLogStreams(message.executionGraph, logProvider);
       // Track execution being viewed from live mode
       // Don't overwrite history detail executions
       if (currentViewedExecution?.source !== 'history') {
@@ -1611,7 +1626,7 @@ async function fetchStepLogsOnDemand(
     }
 
     const variation = await getLogViewerVariation();
-    const isLiveStep = !!status && ACTIVE_LOG_STATUSES.has(status.toUpperCase());
+    const isLiveStep = ACTIVE_LOG_STATUSES.has(normalizeStatus(status));
 
     if (lines.length > 0) {
       // Agent log detection fallback: if logs look like a Harness AI agent run,
@@ -1651,11 +1666,13 @@ async function fetchStepLogsOnDemand(
             stageName: stageName,
             pipelineName: pipelineName || 'Pipeline',
             planExecutionId: planExecutionId || '',
-            status: (status?.toUpperCase() as any) || 'SUCCESS',
+            status: status || 'SUCCESS',
             durationMs: durationMs,
             logLines: lines,
+            live: isLiveStep,
           },
-          logProvider
+          logProvider,
+          { follow: isLiveStep },
         );
         // Notify webview that logs were opened in editor tab
         bridge.send({
@@ -1698,19 +1715,25 @@ async function fetchStepLogsOnDemand(
           status: 'RUNNING', logLines: [],
         })}.log`;
         liveEditorLogs.set(nodeId, {
-          info: { stepName, stageName, pipelineName: pipelineName || 'Pipeline', planExecutionId: planExecutionId || '', status: 'RUNNING', durationMs },
+          info: { stepName, stageName, pipelineName: pipelineName || 'Pipeline', planExecutionId: planExecutionId || '', status: 'RUNNING', durationMs, live: true },
           lines: [...lines],
           keyWithExt,
         });
+        // The stream replays the step from its first line, so its first batch
+        // replaces the snapshot instead of duplicating it.
+        let replaced = false;
         activeLogStreams.start(nodeId, config, streamKey, (batch) => {
           const entry = liveEditorLogs.get(nodeId);
           if (!entry) return;
+          if (!replaced) { entry.lines = []; replaced = true; }
           entry.lines.push(...batch);
-          logProvider.setLog(entry.keyWithExt, formatLogContent({ ...entry.info, logLines: entry.lines }));
+          logProvider.setLog(entry.keyWithExt, formatLogContent({ ...entry.info, logLines: entry.lines }), { follow: true });
         });
       } else {
+        let replaced = false;
         activeLogStreams.start(nodeId, config, streamKey, (batch) => {
-          bridge.send({ type: 'LOG_CHUNK', nodeId, lines: batch });
+          bridge.send({ type: 'LOG_CHUNK', nodeId, lines: batch, replace: !replaced });
+          replaced = true;
         });
       }
     }
