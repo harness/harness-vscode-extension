@@ -4014,6 +4014,22 @@ function renderPanelE(): string {
   </div>`;
 }
 
+const HARNESS_SIGNUP_URL = 'https://app.harness.io/auth/signup?utm_source=harness_vscode_extension&utm_medium=cta&utm_campaign=platform#/signup';
+
+function signupCard(): string {
+  return `<a class="signup-card" data-action="openUrl" data-url="${esc(HARNESS_SIGNUP_URL)}">
+    <span class="signup-card-mark" aria-hidden="true">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M7 1.5v11M1.5 7h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <span class="signup-card-copy">
+      <span class="signup-card-title">Don't have an account?</span>
+      <span class="signup-card-cta">Start for free <span aria-hidden="true">→</span></span>
+    </span>
+  </a>`;
+}
+
 function renderPanelD(): string {
   // Shield icon for footnote (11x11)
   const shieldIcon = `<svg width="11" height="11" viewBox="0 0 12 12" style="flex-shrink:0;margin-top:1px">
@@ -4070,6 +4086,8 @@ function renderPanelD(): string {
 
     <!-- Primary button -->
     <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer;margin-bottom:14px" data-action="configure" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">Start setup</button>
+
+    ${signupCard()}
 
     <!-- Env disclosure link -->
     <div style="text-align:center;margin-bottom:18px">

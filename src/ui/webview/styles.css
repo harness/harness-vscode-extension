@@ -2737,6 +2737,59 @@ a[data-action="openUrl"] { cursor: pointer; }
   padding: 28px 20px 24px;
 }
 
+.signup-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 11px 12px;
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--accent-ring);
+  background:
+    linear-gradient(135deg, var(--accent-soft), transparent 58%),
+    var(--bg-2);
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.signup-card:hover {
+  border-color: var(--accent);
+}
+.signup-card:hover .signup-card-cta {
+  transform: translateX(2px);
+}
+.signup-card-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-ring);
+}
+.signup-card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.signup-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-0);
+  line-height: 1.3;
+}
+.signup-card-cta {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  transition: transform 120ms ease;
+}
+
 /* ── Log unavailable notice ───────────────────────── */
 .log-unavailable {
   padding: 4px 12px 4px 54px;
