@@ -41,8 +41,9 @@ export async function launchAI(options: LaunchOptions): Promise<LaunchResult> {
 }
 
 /**
- * Launch Claude Code Extension
- * Opens the extension and copies prompt to clipboard
+ * Launch Claude Code Extension.
+ * Prefers injecting the prompt into Claude's input (not submitted). Clipboard
+ * paste is only a last-resort fallback for older Claude Code builds.
  */
 async function launchExtension(prompt: string): Promise<LaunchResult> {
   try {
@@ -77,16 +78,55 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
     );
     logger.debug('AI Launcher', 'Available Claude/Anthropic commands:', claudeCommands);
 
-    // Open Claude Code chat interface
-    logger.debug('AI Launcher', '⏳ Opening Claude Code chat...');
+    // Current Claude Code builds take the prompt as the second argument and put
+    // it in the chat input. Without the programmatic flag, a prompt pins the
+    // panel; honor-preferred-location keeps sidebar vs Panel (New Tab).
+    // editor.action.clipboardPasteAction only reaches a text editor.
+    if (claudeCommands.includes('claude-vscode.editor.open')) {
+      try {
+        logger.debug('AI Launcher', '⏳ Opening Claude Code with prompt (honor preferred location)');
+        await vscode.commands.executeCommand(
+          'claude-vscode.editor.open',
+          undefined, // sessionId
+          prompt,
+          undefined, // viewColumn
+          undefined, // sessionGroup
+          undefined, // fullEditor
+          { programmatic: 'honor-preferred-location' },
+        );
+        logger.debug('AI Launcher', '✓ Prompt added via editor.open (preferred location)');
+        vscode.window.showInformationMessage('Prompt added to Claude Code', { modal: false });
+        return {
+          type: 'launched',
+          content: 'Prompt added to Claude Code.',
+        };
+      } catch (err) {
+        logger.debug('AI Launcher', '⚠ editor.open preferred-location failed:', err);
+      }
 
-    // Try these commands in order of preference
+      try {
+        logger.debug('AI Launcher', '⏳ Opening Claude Code with prompt (panel fallback)');
+        await vscode.commands.executeCommand('claude-vscode.editor.open', undefined, prompt);
+        logger.debug('AI Launcher', '✓ Prompt added via editor.open');
+        vscode.window.showInformationMessage('Prompt added to Claude Code', { modal: false });
+        return {
+          type: 'launched',
+          content: 'Prompt added to Claude Code.',
+        };
+      } catch (err) {
+        logger.debug('AI Launcher', '⚠ editor.open with prompt failed:', err);
+      }
+    }
+
+    // Legacy fallback: open Claude, then paste from clipboard only if needed
+    logger.debug('AI Launcher', '⏳ Opening Claude Code chat (clipboard fallback)...');
+
     const openCommands = [
-      'claude-vscode.focus',           // Focus the main Claude view
-      'claudeVSCodeSidebar.focus',     // Focus the sidebar view
-      'claude-vscode.sidebar.open',    // Open sidebar
-      'claudeVSCodeSidebar.open',      // Open the view
-      'claude-vscode.window.open',     // Open as window/editor
+      'claude-vscode.focus',
+      'claudeVSCodeSidebar.focus',
+      'claude-vscode.sidebar.open',
+      'claudeVSCodeSidebar.open',
+      'claude-vscode.window.open',
     ];
 
     let opened = false;
@@ -96,7 +136,6 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
         try {
           await vscode.commands.executeCommand(cmd);
           logger.debug('AI Launcher', `✓ Opened with: ${cmd}`);
-          // Give it time to fully render
           await new Promise(resolve => setTimeout(resolve, 600));
           opened = true;
           break;
@@ -117,45 +156,29 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
       };
     }
 
-    // Try starting a new conversation (opens with empty input ready)
     if (claudeCommands.includes('claude-vscode.newConversation')) {
       logger.debug('AI Launcher', '⏳ Starting new conversation...');
       try {
         await vscode.commands.executeCommand('claude-vscode.newConversation');
         logger.debug('AI Launcher', '✓ New conversation started');
-        // Give the input time to focus and render
         await new Promise(resolve => setTimeout(resolve, 300));
       } catch (err) {
         logger.debug('AI Launcher', '⚠ New conversation failed:', err);
       }
-    } else {
-      logger.debug('AI Launcher', '⚠ newConversation command not available');
     }
 
-    // Copy prompt to clipboard
-    logger.debug('AI Launcher', '⏳ Copying prompt to clipboard...');
+    logger.debug('AI Launcher', '⏳ Clipboard fallback: copying prompt...');
     await vscode.env.clipboard.writeText(prompt);
-    logger.debug('AI Launcher', '✓ Prompt copied');
-
-    // Give UI time to render and focus
     await new Promise(resolve => setTimeout(resolve, 800));
 
-    // Auto-paste without user interaction
-    logger.debug('AI Launcher', 'Auto-pasting prompt...');
     try {
       await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
-      logger.debug('AI Launcher', '✓ Auto-paste successful');
-
-      // Show brief success notification
-      vscode.window.showInformationMessage(
-        '✅ Prompt sent to Claude Code',
-        { modal: false }
-      );
+      logger.debug('AI Launcher', '✓ Clipboard paste succeeded');
+      vscode.window.showInformationMessage('Prompt added to Claude Code', { modal: false });
     } catch (err) {
-      logger.debug('AI Launcher', '⚠ Auto-paste failed, showing fallback notification');
-      // Fallback: show notification if auto-paste fails
+      logger.debug('AI Launcher', '⚠ Clipboard paste failed:', err);
       vscode.window.showInformationMessage(
-        'Prompt copied to clipboard - paste it in Claude Code (Cmd+V)',
+        'Prompt copied to clipboard — paste it in Claude Code (Cmd+V / Ctrl+V)',
         'OK'
       );
     }
@@ -163,7 +186,7 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
     logger.debug('AI Launcher', '✓ Extension launch complete');
     return {
       type: 'launched',
-      content: 'Prompt auto-pasted to Claude Code.',
+      content: 'Prompt added to Claude Code.',
     };
   } catch (error) {
     logger.error('AI Launcher', '✗ Extension launch failed:', error);
@@ -176,7 +199,7 @@ async function launchExtension(prompt: string): Promise<LaunchResult> {
 
 /**
  * Launch Cursor with prompt
- * Opens Cursor Composer/Agents and auto-pastes when user clicks button
+ * Opens Cursor Chat/Agent with the prompt prefilled but not submitted.
  */
 async function launchCursor(prompt: string): Promise<LaunchResult> {
   try {
@@ -193,14 +216,28 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
     );
     logger.debug('AI Launcher', 'Available AI commands:', aiCommands);
 
-    // Copy prompt to clipboard
+    // Cursor 2.3+ accepts a string prompt and pre-fills the chat input without
+    // submitting it. Prefer this over clipboard paste into the chat webview.
+    if (allCommands.includes('workbench.action.chat.open')) {
+      try {
+        await vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+        logger.debug('AI Launcher', '✓ Prompt added through Cursor chat command');
+        vscode.window.showInformationMessage('Prompt added to Cursor', { modal: false });
+        return {
+          type: 'launched',
+          content: 'Prompt added to Cursor.',
+        };
+      } catch (err) {
+        logger.debug('AI Launcher', '⚠ Direct Cursor prompt handoff failed:', err);
+      }
+    }
+
+    // Older Cursor builds: open chat and paste from the clipboard.
     await vscode.env.clipboard.writeText(prompt);
     logger.debug('AI Launcher', '✓ Prompt copied to clipboard');
 
-    // Try opening Cursor Composer/Agent tab
     const commandsToTry = [
       'aichat.newchataction',  // Cursor AI Chat
-      'workbench.action.chat.open',  // Generic chat open
       'workbench.panel.chat.view.copilot.focus',  // Copilot chat (Cursor might use this)
     ];
 
@@ -228,9 +265,8 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
       await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
       logger.debug('AI Launcher', '✓ Auto-paste successful');
 
-      // Show brief success notification
       vscode.window.showInformationMessage(
-        '✅ Prompt sent to Cursor Composer',
+        'Prompt added to Cursor',
         { modal: false }
       );
     } catch (err) {
@@ -245,7 +281,7 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
     logger.debug('AI Launcher', '✓ Cursor launch complete');
     return {
       type: 'launched',
-      content: 'Prompt auto-pasted to Cursor Composer.',
+      content: 'Prompt added to Cursor.',
     };
   } catch (error) {
     logger.error('AI Launcher', '✗ Cursor launch failed:', error);
@@ -258,7 +294,7 @@ async function launchCursor(prompt: string): Promise<LaunchResult> {
 
 /**
  * Launch GitHub Copilot with prompt
- * Opens GitHub Copilot Chat and auto-pastes the prompt
+ * Opens GitHub Copilot Chat with the prompt prefilled but not submitted.
  */
 async function launchCopilot(prompt: string): Promise<LaunchResult> {
   try {
@@ -273,13 +309,31 @@ async function launchCopilot(prompt: string): Promise<LaunchResult> {
     );
     logger.debug('AI Launcher', 'Available Copilot commands:', copilotCommands);
 
-    // Copy prompt to clipboard
+    // VS Code Chat accepts a partial query object. isPartialQuery keeps the
+    // prompt in the input instead of immediately submitting it.
+    if (allCommands.includes('workbench.action.chat.open')) {
+      try {
+        await vscode.commands.executeCommand('workbench.action.chat.open', {
+          query: prompt,
+          isPartialQuery: true,
+          mode: 'agent',
+        });
+        logger.debug('AI Launcher', '✓ Prompt added through VS Code Chat command');
+        vscode.window.showInformationMessage('Prompt added to GitHub Copilot', { modal: false });
+        return {
+          type: 'launched',
+          content: 'Prompt added to GitHub Copilot.',
+        };
+      } catch (err) {
+        logger.debug('AI Launcher', '⚠ Direct Copilot prompt handoff failed:', err);
+      }
+    }
+
+    // Older VS Code/Copilot builds: open chat and paste from the clipboard.
     await vscode.env.clipboard.writeText(prompt);
     logger.debug('AI Launcher', '✓ Prompt copied to clipboard');
 
-    // Try opening GitHub Copilot Chat
     const commandsToTry = [
-      'workbench.action.chat.open',  // Open chat panel
       'github.copilot.chat.focus',  // Focus Copilot chat
       'workbench.panel.chat.view.copilot.focus',  // Focus Copilot panel view
     ];
@@ -317,9 +371,8 @@ async function launchCopilot(prompt: string): Promise<LaunchResult> {
       await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
       logger.debug('AI Launcher', '✓ Auto-paste successful');
 
-      // Show brief success notification
       vscode.window.showInformationMessage(
-        '✅ Prompt sent to GitHub Copilot',
+        'Prompt added to GitHub Copilot',
         { modal: false }
       );
     } catch (err) {
@@ -334,7 +387,7 @@ async function launchCopilot(prompt: string): Promise<LaunchResult> {
     logger.debug('AI Launcher', '✓ GitHub Copilot launch complete');
     return {
       type: 'launched',
-      content: 'Prompt auto-pasted to GitHub Copilot.',
+      content: 'Prompt added to GitHub Copilot.',
     };
   } catch (error) {
     logger.error('AI Launcher', '✗ GitHub Copilot launch failed:', error);

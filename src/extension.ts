@@ -15,10 +15,13 @@ import { submitApproval } from './api/approvalService';
 import { rerunPipeline } from './api/rerunService';
 import { abortExecution, InterruptType } from './api/abortService';
 import { dispatchModules } from './pipeline/executionDispatcher';
+import { resolveLogUnits, type GraphNodeLike, type LogUnit } from './pipeline/executionModel';
 import { initFmeClient, destroyFmeClient, getLogViewerVariation } from './fme/fmeClient';
 import { LogContentProvider, LOG_SCHEME } from './logs/logContentProvider';
-import { openLogAsEditorTab } from './logs/logEditorTab';
+import { openLogAsEditorTab, formatContent as formatLogContent, stepKey as logStepKey, type StepLogInfo } from './logs/logEditorTab';
+import { displayStatus } from './logs/logFormat';
 import { openAgentChatTab, isAgentLog } from './logs/agentChatTab';
+import { ActiveLogStreams } from './logs/activeLogStreams';
 import { openAidaChatPanel, registerAidaChatPanelSerializer, updateActiveChatContext, updateActiveChatTheme, type IntelligenceChatContext } from './ai/aidaChatPanel';
 import { AidaAvailability } from './ai/aidaAvailability';
 import { detectAITools } from './ai/detector';
@@ -28,6 +31,64 @@ import { launchAI } from './ai/launcher';
 import { migrateAiSettings, readAiDestination, readPreferredExternalToolId, setAiDestination, setPreferredExternalTool } from './ai/aiSettings';
 import { logger } from './utils/logger';
 import { configureProxy, registerProxyConfigWatcher } from './utils/proxy';
+
+// Live log tailing (phase 2). One tail per step node; the extension does not
+// keep a stream open indefinitely — see reconcileLogStreams() and ACTIVE_LOG_STATUSES.
+const activeLogStreams = new ActiveLogStreams();
+const liveEditorLogs = new Map<string, { info: Omit<StepLogInfo, 'logLines'>; lines: string[]; keyWithExt: string }>();
+// The same status arrives as `AsyncWaiting`, `ASYNCWAITING` or `ASYNC_WAITING`.
+const normalizeStatus = (status?: string) => (status ?? '').toUpperCase().replace(/[^A-Z]/g, '');
+const ACTIVE_LOG_STATUSES = new Set(['RUNNING', 'ASYNCWAITING', 'TASKWAITING']);
+const TERMINAL_LOG_STATUSES = new Set(['SUCCESS', 'FAILED', 'ABORTED', 'EXPIRED', 'IGNOREFAILED', 'SKIPPED', 'POLICYEVALUATIONFAILURE', 'ERRORED']);
+const LOG_STREAM_DRAIN_MS = 5000;
+const logStreamDrainTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function stopLogStream(nodeId: string): void {
+  const timer = logStreamDrainTimers.get(nodeId);
+  if (timer) { clearTimeout(timer); logStreamDrainTimers.delete(nodeId); }
+  activeLogStreams.stop(nodeId);
+  liveEditorLogs.delete(nodeId);
+}
+
+function stopAllLogStreams(): void {
+  for (const timer of logStreamDrainTimers.values()) clearTimeout(timer);
+  logStreamDrainTimers.clear();
+  activeLogStreams.stopAll();
+  liveEditorLogs.clear();
+}
+
+/**
+ * Called on every EXECUTION_UPDATE / HISTORY_DETAIL the host sends. A step
+ * that is streaming and has gone terminal gets a short drain (its tail may
+ * still be flushing) before the connection is closed.
+ */
+function reconcileLogStreams(
+  executionGraph: { nodeMap?: Record<string, { status?: string; startTs?: number | null; endTs?: number | null }> } | null | undefined,
+  logProvider: LogContentProvider,
+): void {
+  if (!executionGraph?.nodeMap) return;
+  for (const nodeId of [...logStreamDrainTimers.keys()]) {
+    if (!executionGraph.nodeMap[nodeId]) stopLogStream(nodeId); // node dropped off the graph entirely
+  }
+  for (const nodeId of activeLogStreams.activeNodeIds()) {
+    const node = executionGraph.nodeMap[nodeId];
+    const status = normalizeStatus(node?.status);
+    if (TERMINAL_LOG_STATUSES.has(status) && !logStreamDrainTimers.has(nodeId)) {
+      const entry = liveEditorLogs.get(nodeId);
+      if (entry && node) {
+        const durationMs = node.startTs && node.endTs && node.endTs >= node.startTs
+          ? node.endTs - node.startTs
+          : entry.info.durationMs;
+        entry.info = { ...entry.info, status: displayStatus(node.status), durationMs, live: false };
+        logProvider.setLog(entry.keyWithExt, formatLogContent({ ...entry.info, logLines: entry.lines }), { follow: true });
+      }
+      logStreamDrainTimers.set(nodeId, setTimeout(() => {
+        logStreamDrainTimers.delete(nodeId);
+        stopLogStream(nodeId);
+      }, LOG_STREAM_DRAIN_MS));
+    }
+  }
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const secretStore    = new SecretStore(context.secrets);
@@ -261,7 +322,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const planExecutionId = (m as any).planExecutionId as string;
       const action = m.action === 'REJECT' ? 'REJECT' : 'APPROVE';
       try {
-        await submitApproval(currentConfig, planExecutionId, action, m.comments);
+        await submitApproval(currentConfig, planExecutionId, action, {
+          comments: m.comments,
+          nodeExecutionId: (m as any).nodeId as string | undefined,
+          approvalInstanceId: (m as any).approvalInstanceId as string | undefined,
+        });
         const actionPastTense = action === 'REJECT' ? 'rejected' : 'approved';
         vscode.window.showInformationMessage(`Harness: Approval ${actionPastTense} successfully.`);
         poller?.refresh();
@@ -352,6 +417,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.showErrorMessage('Harness: Cannot fetch execution detail');
         return;
       }
+      stopAllLogStreams(); // switching detail executions invalidates any step tails from the previous one
       await fetchExecutionDetail(currentConfig, bridge, diagnostics, m.planExecutionId);
       // Register with poller for continuous updates if execution is running
       if (poller) {
@@ -367,8 +433,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           // Agent step: open chat viewer panel instead of log editor tab
           openAgentChatTabForStep(currentConfig, msg.logBaseKey, msg.stepName, msg.stageName, msg.pipelineName, msg.planExecutionId, msg.status, msg.durationMs, bridge, msg.nodeId);
         } else {
+          const node = currentViewedExecution?.executionGraph?.nodeMap?.[msg.nodeId] as GraphNodeLike | undefined;
+          const units = node ? resolveLogUnits(node) : [];
+          const endTs = typeof node?.endTs === 'number' ? node.endTs : undefined;
           // Run log fetch in background - don't block message handler or poller
-          fetchStepLogsOnDemand(currentConfig, bridge, logProvider, msg.logBaseKey, msg.nodeId, msg.stepName, msg.stageName, msg.pipelineName, msg.planExecutionId, msg.status, msg.durationMs);
+          fetchStepLogsOnDemand(currentConfig, bridge, logProvider, msg.logBaseKey, msg.nodeId, msg.stepName, msg.stageName, msg.pipelineName, msg.planExecutionId, msg.status, msg.durationMs, { units, endTs });
         }
       }
     } else if (m.type === 'setDefaultView') {
@@ -386,6 +455,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // Clear tracked execution when user navigates away from execution detail
       logger.debug('Extension', 'Clearing tracked execution (user navigated away)');
       currentViewedExecution = null;
+      stopAllLogStreams();
       // Stop polling the detail execution
       if (poller) {
         poller.clearDetailExecution();
@@ -826,9 +896,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         hasGraph: !!message.executionGraph,
       });
       syncChatContext();
+      reconcileLogStreams(message.executionGraph, logProvider);
     } else if (message.type === 'EXECUTION_UPDATE') {
       const ex = message.execution;
       statusBar.updateFromStatus(ex.status, ex.name ?? ex.pipelineIdentifier ?? 'Pipeline');
+      reconcileLogStreams(message.executionGraph, logProvider);
       // Track execution being viewed from live mode
       // Don't overwrite history detail executions
       if (currentViewedExecution?.source !== 'history') {
@@ -1528,11 +1600,12 @@ async function fetchStepLogsOnDemand(
   pipelineName?: string,
   planExecutionId?: string,
   status?: string,
-  durationMs?: number
+  durationMs?: number,
+  logOptions?: { units?: LogUnit[]; endTs?: number | null },
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    logger.debug('Extension', 'Fetching logs on-demand', { logBaseKey, nodeId });
+    logger.debug('Extension', 'Fetching logs on-demand', { logBaseKey, nodeId, units: logOptions?.units?.length ?? 0 });
 
     // Send loading state
     bridge.send({
@@ -1542,43 +1615,18 @@ async function fetchStepLogsOnDemand(
 
     const { fetchStepLogs } = await import('./api/logService');
     let lines: string[] = [];
-    let attempts = 0;
-
-    // Try immediately first
     try {
-      lines = await fetchStepLogs(config as any, logBaseKey);
-      attempts++;
-      logger.debug('Extension', `Initial fetch: ${lines.length} lines`, { nodeId });
-    } catch (err) {
-      logger.error('Extension', 'Initial fetch error:', err);
-    }
-
-    // Retry with exponential backoff if no logs found (logs might not be indexed yet)
-    const retryDelays = [3000, 5000, 7000, 10000]; // 3s, 5s, 7s, 10s (total 25s)
-    for (let i = 0; i < retryDelays.length && lines.length === 0; i++) {
-      logger.debug('Extension', `Retry ${i + 1}/${retryDelays.length} in ${retryDelays[i]}ms...`, {
+      lines = await fetchStepLogs(config as any, logBaseKey, logOptions);
+      logger.debug('Extension', `Fetched ${lines.length} lines`, {
         nodeId,
-        logBaseKey,
-        elapsed: `${((Date.now() - startTime) / 1000).toFixed(1)}s`
+        elapsed: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
       });
-      await new Promise<void>(resolve => {
-        (globalThis as any).setTimeout(() => resolve(), retryDelays[i]);
-      });
-
-      try {
-        lines = await fetchStepLogs(config as any, logBaseKey);
-        attempts++;
-        logger.debug('Extension', `Retry ${i + 1} result: ${lines.length} lines`, { nodeId });
-        if (lines.length > 0) {
-          logger.debug('Extension', `✓ Logs found after ${attempts} attempts (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
-            nodeId,
-            lineCount: lines.length
-          });
-        }
-      } catch (err) {
-        logger.error('Extension', `Retry ${i + 1} error:`, err);
-      }
+    } catch (err) {
+      logger.error('Extension', 'Log fetch error:', err);
     }
+
+    const variation = await getLogViewerVariation();
+    const isLiveStep = ACTIVE_LOG_STATUSES.has(normalizeStatus(status));
 
     if (lines.length > 0) {
       // Agent log detection fallback: if logs look like a Harness AI agent run,
@@ -1599,8 +1647,6 @@ async function fetchStepLogsOnDemand(
         return;
       }
 
-      // Check FME variation to decide how to display logs
-      const variation = await getLogViewerVariation();
       logger.debug('Extension', `Log viewer variation: ${variation}`, { nodeId });
 
       if (variation === 'expanded' && stepName && stageName) {
@@ -1620,11 +1666,13 @@ async function fetchStepLogsOnDemand(
             stageName: stageName,
             pipelineName: pipelineName || 'Pipeline',
             planExecutionId: planExecutionId || '',
-            status: (status?.toUpperCase() as any) || 'SUCCESS',
+            status: status || 'SUCCESS',
             durationMs: durationMs,
             logLines: lines,
+            live: isLiveStep,
           },
-          logProvider
+          logProvider,
+          { follow: isLiveStep },
         );
         // Notify webview that logs were opened in editor tab
         bridge.send({
@@ -1638,12 +1686,13 @@ async function fetchStepLogsOnDemand(
           type: 'LOG_CHUNK',
           nodeId,
           lines,
+          replace: true,
           autoExpand: false, // Don't auto-expand in detail view - let user click to expand
         });
         logger.debug('Extension', '✓ LOG_CHUNK message sent', { nodeId });
       }
     } else {
-      logger.debug('Extension', `✗ No logs found after ${attempts} attempts (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
+      logger.debug('Extension', `✗ No logs found (${((Date.now() - startTime) / 1000).toFixed(1)}s)`, {
         nodeId,
         logBaseKey
       });
@@ -1651,6 +1700,42 @@ async function fetchStepLogsOnDemand(
         type: 'STEP_LOGS_EMPTY',
         nodeId,
       });
+    }
+
+    // Phase 2: tail a running step's log key so new lines show up without a
+    // manual retry. Bounded by reconcileLogStreams() — closed shortly after
+    // the step goes terminal, or immediately if the user leaves this execution.
+    if (isLiveStep) {
+      const streamKey = logOptions?.units?.[0]?.key ?? logBaseKey;
+      if (variation === 'expanded' && stepName && stageName) {
+        const keyWithExt = `${logStepKey({
+          stepName, stageName,
+          pipelineName: pipelineName || 'Pipeline',
+          planExecutionId: planExecutionId || '',
+          status: 'RUNNING', logLines: [],
+        })}.log`;
+        liveEditorLogs.set(nodeId, {
+          info: { stepName, stageName, pipelineName: pipelineName || 'Pipeline', planExecutionId: planExecutionId || '', status: 'RUNNING', durationMs, live: true },
+          lines: [...lines],
+          keyWithExt,
+        });
+        // The stream replays the step from its first line, so its first batch
+        // replaces the snapshot instead of duplicating it.
+        let replaced = false;
+        activeLogStreams.start(nodeId, config, streamKey, (batch) => {
+          const entry = liveEditorLogs.get(nodeId);
+          if (!entry) return;
+          if (!replaced) { entry.lines = []; replaced = true; }
+          entry.lines.push(...batch);
+          logProvider.setLog(entry.keyWithExt, formatLogContent({ ...entry.info, logLines: entry.lines }), { follow: true });
+        });
+      } else {
+        let replaced = false;
+        activeLogStreams.start(nodeId, config, streamKey, (batch) => {
+          bridge.send({ type: 'LOG_CHUNK', nodeId, lines: batch, replace: !replaced });
+          replaced = true;
+        });
+      }
     }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -1666,5 +1751,6 @@ async function fetchStepLogsOnDemand(
 export function deactivate(): void {
   // Cleanup FME client
   destroyFmeClient();
+  stopAllLogStreams();
   // All disposables are registered in context.subscriptions — nothing to do here
 }

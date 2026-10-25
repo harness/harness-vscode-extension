@@ -214,9 +214,9 @@ Build prompt with context
   • Harness URL
        ↓
 Launch AI tool
-  • Claude Code: Use MCP server
-  • Copilot: Open chat with auto-paste
-  • Cursor: Use plugin or MCP
+  • Claude Code Terminal: integrated terminal with the prompt
+  • Claude Code Extension / Cursor / Copilot: open the tool's chat
+    with the prompt filled in (clipboard paste only as a fallback)
        ↓
 AI tool responds with analysis
 ```
@@ -224,18 +224,27 @@ AI tool responds with analysis
 ### 5. **Log Viewing Flow**
 
 ```
-User clicks "View Logs" on step
+User clicks a step
        ↓
-LogContentProvider.provideTextDocumentContent()
+fetchStepLogsOnDemand() (extension.ts)
        ↓
-HarnessClient.getStepLogs()
+resolveLogUnits(node) → ordered log keys for the step
        ↓
-Parse & format logs
+fetchStepLogs() → GET /gateway/log-service/blob per unit
+  (fallback: signed ZIP download, then one-shot stream)
        ↓
-Apply syntax highlighting
-  (harness-log language grammar)
+formatLogContent() → header + original lines
        ↓
-Display in editor tab
+LogContentProvider.setLog() → harness-log:/<key>.log editor tab
+       ↓
+Step still running?
+  yes → ActiveLogStreams.start()
+          GET /gateway/log-service/stream (SSE, Harness-Account header)
+          first batch replaces the snapshot, later batches append
+          tab follows the newest line while scrolled to the bottom
+          reconcileLogStreams(): step turns terminal → header updated,
+          tail closed after a 5s drain
+  no  → done (finished steps are never streamed)
 ```
 
 ---
@@ -261,11 +270,14 @@ Display in editor tab
 - **PipelinePoller**: Periodically fetches execution status (respects window focus & sidebar visibility)
 - **HarnessClient**: HTTP client for all Harness API calls
 - **ExecutionDispatcher**: Parses execution data and extracts module-specific info
+- **ExecutionModel**: Detects legacy (v0) vs Harness 3.0 (v1) pipeline graphs, walks stages and nested step groups, resolves each step's log units
 
 ### **API Services**
 Each service handles a specific domain:
-- **LogService**: Fetches & caches logs with pagination
-- **ApprovalService**: Submits approval decisions
+- **LogService / CompletedLogs**: Completed-step logs from the gateway raw blob, per log unit, with legacy fallbacks
+- **LogStream**: Live SSE tail for a running step
+- **ApprovalService**: Resolves the waiting approval instance for a step and approves/rejects that instance
+- **ApprovalInstances / UserGroups**: Instance lookup URLs; approver group scope and display labels
 - **RerunService**: Triggers pipeline re-runs
 - **AbortService**: Aborts/marks executions as failed
 - **StoService/SscaService**: Security scanning data
@@ -376,8 +388,12 @@ src/
 ├── extension.ts              # Main entry point
 ├── api/                      # Harness API services
 │   ├── harnessClient.ts      # HTTP client
-│   ├── logService.ts         # Log fetching
-│   ├── approvalService.ts    # Approvals
+│   ├── logService.ts         # Completed-log entry point + legacy fallbacks
+│   ├── completedLogs.ts      # Gateway raw blob per log unit
+│   ├── logStream.ts          # Live SSE tail
+│   ├── approvalService.ts    # Approvals (per instance)
+│   ├── approvalInstances.ts  # Approval instance lookup
+│   ├── userGroups.ts         # Approver group scope + labels
 │   ├── rerunService.ts       # Re-run logic
 │   ├── abortService.ts       # Abort logic
 │   ├── userService.ts        # User info
@@ -399,7 +415,8 @@ src/
 │       └── styles.css        # Styling
 ├── pipeline/                 # Polling logic
 │   ├── pipelinePoller.ts     # Polling engine
-│   └── executionDispatcher.ts # Data parsing
+│   ├── executionDispatcher.ts # Data parsing
+│   └── executionModel.ts     # v0/v1 graph walk + log units
 ├── features/                 # Code annotations
 │   ├── stoAnnotations.ts     # Security markers
 │   ├── tiAnnotations.ts      # Coverage markers
@@ -415,8 +432,10 @@ src/
 ├── fme/                      # Feature Management
 │   └── fmeClient.ts          # Feature flags
 ├── logs/                     # Log viewing
-│   ├── logContentProvider.ts # Editor content
-│   └── logEditorTab.ts       # Tab management
+│   ├── logContentProvider.ts # Editor content, refresh + follow
+│   ├── logEditorTab.ts       # Tab management
+│   ├── logFormat.ts          # Header + line formatting
+│   └── activeLogStreams.ts   # One live tail per step
 ├── config/                   # Configuration
 │   └── configManager.ts      # Settings management
 ├── git/                      # Git integration
@@ -459,12 +478,16 @@ Webview → Extension:
 {
   "type": "approval",
   "planExecutionId": "xyz",
-  "action": "APPROVE",
-  "comments": "Looks good"
+  "nodeId": "<approval step node id>",
+  "approvalInstanceId": "<instance id, when known>",
+  "action": "APPROVE"
 }
 
 Extension → Harness API:
-POST /approval/submit
+GET  /gateway/pipeline/api/v1/orgs/{org}/projects/{project}/approvals/execution/{execId}
+       ?approval_status=WAITING&approval_type=HarnessApproval&node_execution_id={nodeId}
+       (skipped when the instance id is already on the graph node)
+POST /gateway/pipeline/api/approvals/{approvalInstanceId}/harness/activity?accountIdentifier=…
 ```
 
 ---

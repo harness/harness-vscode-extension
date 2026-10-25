@@ -7,7 +7,7 @@ import { logger } from '../utils/logger';
 export type WebviewMessage =
   | { type: 'GIT_CONTEXT';      ctx: GitContext | null; org?: string; project?: string; defaultView?: string; logViewerVariation?: string; webviewTheme?: 'simple' | 'enhanced'; ideThemeKind?: number; aiChatEnabled?: boolean }
   | { type: 'EXECUTION_UPDATE'; execution: ExecutionDetail; executionGraph?: ExecutionGraph | null; isTerminal?: boolean; harnessUrl?: string; commitWebUrl?: string }
-  | { type: 'LOG_CHUNK';        nodeId: string; lines: string[]; autoExpand?: boolean }
+  | { type: 'LOG_CHUNK';        nodeId: string; lines: string[]; autoExpand?: boolean; replace?: boolean }
   | { type: 'CD_UPDATE';        deployments: unknown }
   | { type: 'STO_SUMMARY';      count: number; high: number; medium: number; critical: number }
   | { type: 'TI_SUMMARY';       failed: number; flaky: number; selected: number; total: number }
@@ -20,8 +20,8 @@ export type WebviewMessage =
   | { type: 'SHA_MISMATCH';     lastExecution: ExecutionSummary }
   | { type: 'AUTH_ERROR' }
   | { type: 'LOGS_UNAVAILABLE' }
-  | { type: 'APPROVAL_UPDATE'; planExecutionId: string; approvers?: string[]; userGroups?: string[]; deadline?: number; minimumCount?: number; canApprove?: boolean; stageIdentifier?: string }
-  | { type: 'EXTERNAL_APPROVAL_UPDATE'; planExecutionId: string; approvalType: 'Jira' | 'ServiceNow'; ticketId: string; ticketUrl?: string; projectKey?: string; issueType?: string; ticketType?: string; approvalCriteria?: string; rejectionCriteria?: string; stageIdentifier?: string }
+  | { type: 'APPROVAL_UPDATE'; planExecutionId: string; approvals: Array<{ nodeId: string; approvalInstanceId?: string; approvers?: string[]; userGroups?: string[]; deadline?: number; minimumCount?: number; canApprove?: boolean; stageIdentifier?: string }> }
+  | { type: 'EXTERNAL_APPROVAL_UPDATE'; planExecutionId: string; approvals: Array<{ nodeId: string; approvalType: 'Jira' | 'ServiceNow'; ticketId: string; ticketUrl?: string; projectKey?: string; issueType?: string; ticketType?: string; approvalCriteria?: string; rejectionCriteria?: string; stageIdentifier?: string }> }
   | { type: 'PIPELINE_LIST';   pipelines: PipelineListItem[]; pinnedPipelines?: string[] }
   | { type: 'HISTORY_LIST';    executions: ExecutionSummary[]; total: number; page: number }
   | { type: 'HISTORY_DETAIL';  execution: ExecutionDetail; executionGraph?: ExecutionGraph | null; harnessUrl?: string; commitWebUrl?: string; aida?: unknown; opa?: unknown; cost?: unknown; sto?: unknown; ti?: unknown; ssca?: unknown; cd?: unknown; approval?: unknown; externalApproval?: unknown }

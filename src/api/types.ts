@@ -5,6 +5,8 @@ export interface ExecutionSummary {
   pipelineIdentifier: string;
   name: string;
   status: string;
+  /** "1" is a Harness 3.0 pipeline. "0" or absent is the legacy format. */
+  yamlVersion?: string;
   startTs: number;
   endTs?: number;
   moduleInfo?: ModuleInfo;
@@ -26,6 +28,8 @@ export interface ExecutionDetail {
   pipelineIdentifier: string;
   name: string;
   status: string;
+  /** "1" is a Harness 3.0 pipeline. "0" or absent is the legacy format. */
+  yamlVersion?: string;
   startTs: number;
   endTs?: number;
   runSequence?: number;
@@ -62,10 +66,12 @@ export interface CiModuleInfo {
 export interface LayoutNode {
   nodeUuid: string;
   nodeType: string;
+  /** YAML identifier. v1 uses this to match a layout stage to its graph node. */
+  nodeIdentifier?: string;
   name: string;
   status: string;
-  startTs?: number;
-  endTs?: number;
+  startTs?: number | null;
+  endTs?: number | null;
   nodeGroup?: string;
   edgeLayoutList?: { currentNodeChildren?: string[]; nextIds?: string[] };
   logBaseKey?: string;
@@ -76,8 +82,9 @@ export interface LayoutNode {
   shouldRunOnAnyAllExecutions?: boolean;
 }
 
-// executionGraph — returned alongside pipelineExecutionSummary in /v2 response
-// Contains step-level nodes that are NOT in layoutNodeMap
+// executionGraph — returned alongside pipelineExecutionSummary in /v2 response.
+// Legacy responses keep step nodes here and stages in layoutNodeMap. v1 responses
+// also copy steps into layoutNodeMap, all tagged nodeGroup "STAGE".
 export interface ExecutionGraph {
   rootNodeId?: string;
   nodeMap?: Record<string, ExecutionNode>;
@@ -91,10 +98,11 @@ export interface ExecutionNode {
   baseFqn?: string;      // fully-qualified node name — sometimes used as log key
   status: string;
   stepType?: string;
-  startTs?: number;
-  endTs?: number;
+  startTs?: number | null;
+  endTs?: number | null;
   failureInfo?: { message?: string };
   logBaseKey?: string;
+  executableResponses?: ExecutableResponse[];
   unitProgresses?: Array<{ unitName: string; status: string; startTime?: number; endTime?: number }>;
   // HarnessApproval step — present when waiting for approval
   executableElementsCount?: number;
@@ -109,6 +117,16 @@ export interface ExecutionNode {
   // Present on the legacy custom `Security` scan node — product_name reveals
   // the underlying scanner.
   stepParameters?: { spec?: Record<string, unknown> & { product_name?: string } };
+}
+
+export interface ExecutableResponse {
+  task?: { logKeys?: string[]; units?: string[] };
+  taskChain?: { logKeys?: string[]; units?: string[] };
+  async?: { logKeys?: string[]; units?: string[] };
+  asyncChain?: { logKeys?: string[]; units?: string[] };
+  sync?: { logKeys?: string[]; units?: string[] };
+  child?: { logKeys?: string[]; units?: string[] };
+  children?: { logKeys?: string[]; units?: string[] };
 }
 
 export interface StoFinding {

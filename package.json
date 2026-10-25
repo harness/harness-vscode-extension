@@ -2,7 +2,7 @@
   "name": "harness-vscode",
   "displayName": "Harness",
   "description": "Monitor Harness pipelines, view logs, and manage approvals directly in VS Code. Real-time CI/CD visibility without context switching.",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "publisher": "harness",
   "engines": {
     "vscode": "^1.85.0"
@@ -282,7 +282,7 @@
             ],
             "enumDescriptions": [
               "Use the first detected tool",
-              "Claude Code CLI in the integrated terminal",
+              "Claude Code in the integrated terminal",
               "Claude Code extension",
               "Cursor",
               "GitHub Copilot",
@@ -336,6 +336,7 @@
   "scripts": {
     "vscode:prepublish": "node esbuild.js",
     "compile": "node esbuild.js",
+    "test": "node scripts/run-tests.js",
     "watch": "node esbuild.js --watch",
     "package": "vsce package"
   },

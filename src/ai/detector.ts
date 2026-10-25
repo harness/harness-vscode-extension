@@ -82,7 +82,7 @@ async function detectClaudeCLI(): Promise<DetectedTool | null> {
     return {
       id: 'claudecode-cli',
       name: 'Claude Code',
-      sub: 'CLI',
+      sub: 'Terminal',
       mcpReady,
       path: cliPath,
     };

@@ -818,7 +818,7 @@ body.theme-simple {
 .theme-enhanced .stage-row {
   display: flex; align-items: center; gap: 8px;
   width: 100%;
-  padding: 9px 10px;
+  padding: 9px 26px 9px 10px;
   background: transparent; border: none;
   cursor: pointer;
   color: inherit;
@@ -851,7 +851,10 @@ body.theme-simple {
 .theme-enhanced .stage-name.is-pending { color: var(--fg-3); font-weight: 400; }
 .theme-enhanced .stage-name.is-waiting { color: var(--secondary); font-weight: 600; }
 .theme-enhanced .stage-dur {
+  margin-left: auto;
+  flex-shrink: 0;
   font-size: 10px; font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--fg-3);
 }
 
@@ -865,8 +868,10 @@ body.theme-simple {
 }
 .theme-enhanced .step-row {
   display: flex; align-items: center; gap: 8px;
+  position: relative;
   width: 100%;
-  padding: 5px 8px;
+  min-width: 0;
+  padding: 5px 16px 5px 8px;
   background: transparent; border: none;
   border-radius: var(--r-sm);
   cursor: pointer;
@@ -875,7 +880,22 @@ body.theme-simple {
   transition: background .1s;
   margin: 1px 0;
 }
+.theme-enhanced .step-indent { flex: 0 0 auto; }
+.theme-enhanced .step-row > .tip-wrap {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.theme-enhanced .step-row.step-group {
+  cursor: default;
+}
+.theme-enhanced .step-row.step-group .step-name {
+  font-weight: 600;
+  color: var(--fg-2);
+}
 .theme-enhanced .step-row:hover { background: var(--bg-2); }
+.theme-enhanced .step-row.step-group:hover { background: transparent; }
 .theme-enhanced .step-row.on {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);
@@ -883,13 +903,20 @@ body.theme-simple {
 .theme-enhanced .step-stat { flex-shrink: 0; }
 .theme-enhanced .step-name {
   flex: 1;
+  min-width: 0;
   font-size: 11.5px; color: var(--fg-1);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .theme-enhanced .step-row.is-failed .step-name { color: var(--err); }
 .theme-enhanced .step-row.is-pending .step-name { color: var(--fg-3); font-style: italic; }
 .theme-enhanced .step-row.on .step-name { color: var(--accent); }
-.theme-enhanced .step-dur { font-size: 10px; font-family: var(--font-mono); color: var(--fg-3); }
+.theme-enhanced .step-dur {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px; font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-3);
+}
 .theme-enhanced .step-ext { color: var(--fg-3); opacity: 0; transition: opacity .15s; }
 .theme-enhanced .step-row:hover .step-ext { opacity: 1; color: var(--accent); }
 
@@ -2274,20 +2301,23 @@ a[data-action="openUrl"] { cursor: pointer; }
   display: flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
   padding: 2px 12px 2px 34px;
   font-size: 10px;
   color: var(--vscode-descriptionForeground);
   user-select: none;
   cursor: default;
 }
+.step-indent { flex: 0 0 auto; }
+.step-row.step-group { cursor: default; font-weight: 600; }
 .step-row.step-clickable { cursor: pointer; }
 .step-row.step-clickable:hover { background: var(--vscode-list-hoverBackground); }
 .step-row.step-running { color: var(--vscode-foreground); }
 .step-toggle { width: 10px; text-align: center; flex-shrink: 0; font-size: 9px; opacity: 0.7; }
 .step-toggle.step-loading { animation: spin 1s linear infinite; }
 .step-icon   { width: 11px; text-align: center; flex-shrink: 0; font-size: 10px; }
-.step-name   { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.step-dur    { font-variant-numeric: tabular-nums; font-size: 10px; }
+.step-name   { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-dur    { margin-left: auto; flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: 10px; text-align: right; }
 
 /* Failed step highlighting */
 .step-row.failed .step-name {
@@ -2705,6 +2735,59 @@ a[data-action="openUrl"] { cursor: pointer; }
 /* ── Onboarding empty state (Variant B) ───────────── */
 .onboarding-empty {
   padding: 28px 20px 24px;
+}
+
+.signup-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 11px 12px;
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--accent-ring);
+  background:
+    linear-gradient(135deg, var(--accent-soft), transparent 58%),
+    var(--bg-2);
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.signup-card:hover {
+  border-color: var(--accent);
+}
+.signup-card:hover .signup-card-cta {
+  transform: translateX(2px);
+}
+.signup-card-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-ring);
+}
+.signup-card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.signup-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-0);
+  line-height: 1.3;
+}
+.signup-card-cta {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  transition: transform 120ms ease;
 }
 
 /* ── Log unavailable notice ───────────────────────── */

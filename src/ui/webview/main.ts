@@ -1,4 +1,6 @@
 // Webview renderer — browser context only, no vscode.* APIs
+import { listLayoutStages, stepsForStage } from '../../pipeline/executionModel';
+
 interface VsCodeApi { postMessage(msg: unknown): void; }
 declare function acquireVsCodeApi(): VsCodeApi;
 const vscode = acquireVsCodeApi();
@@ -51,10 +53,9 @@ function getStateFingerprint(): string {
     // Add active stage ID (changes when execution progresses to next stage)
     parts.push(`activeStage:${ex.activeStageId || ''}`);
 
-    // Add stage statuses from layoutNodeMap (detects stage status changes)
-    const stageStatuses = Object.entries(ex.layoutNodeMap)
-      .filter(([, node]) => node.nodeGroup === 'STAGE')
-      .map(([id, node]) => `${id}:${node.status}`)
+    // Real stages only. v1 also stores steps in layoutNodeMap as nodeGroup STAGE.
+    const stageStatuses = listLayoutStages(ex.layoutNodeMap, ex.executionGraph, ex.yamlVersion)
+      .map(node => `${node.nodeUuid}:${node.status}:${node.startTs || 0}`)
       .sort()
       .join(',');
     parts.push(`stages:${stageStatuses}`);
@@ -207,25 +208,23 @@ interface GraphNode {
   uuid?: string;
   name: string;
   identifier?: string;   // YAML step ID — the actual step name (e.g., "OWASP_1", "ShellScript_2")
+  baseFqn?: string;
   status: string;
   stepType?: string;
-  startTs?: number;
-  endTs?: number;
+  startTs?: number | null;
+  endTs?: number | null;
   logBaseKey?: string;
   failureInfo?: { message?: string };
   unitProgresses?: UnitProgress[];
-}
-
-interface StepInfo {
-  name: string;
-  status: string;
-  startTs?: number;
-  endTs?: number;
-  nodeId?: string;       // graph node key — used to correlate LOG_CHUNK messages
-  logBaseKey?: string;   // passed to log-service to fetch logs
-  stepType?: string;     // step type (e.g., HarnessApproval, JiraApproval, ServiceNowApproval)
-  identifier?: string;   // YAML step identifier — used to detect agent steps
-  parentGroupName?: string; // name of the enclosing STEP_GROUP, if any
+  executableResponses?: Array<{
+    task?: { logKeys?: string[] };
+    taskChain?: { logKeys?: string[] };
+    async?: { logKeys?: string[] };
+    asyncChain?: { logKeys?: string[] };
+    sync?: { logKeys?: string[] };
+    child?: { logKeys?: string[] };
+    children?: { logKeys?: string[] };
+  }>;
 }
 
 interface ExecGraph {
@@ -263,6 +262,7 @@ interface ExecState {
     triggerType?: string;
     triggeredBy?: { triggerIdentifier?: string; identifier?: string; email?: string };
   };
+  yamlVersion?: string;
   layoutNodeMap: Record<string, LayoutNode>;
   executionGraph?: ExecGraph | null;
   isTerminal: boolean;
@@ -273,8 +273,8 @@ interface ExecState {
   stepLogs: Record<string, string[]>;  // nodeId → lines
   aida?:  { stageId: string; cause?: string; summary?: string; deepDiveUrl?: string };
   opa?:   { policySetName?: string; details?: Array<{ policyName: string; status: string; denyMessages?: string[] }>; policyUrl?: string };
-  approval?: { planExecutionId: string; approvers?: string[]; userGroups?: string[]; minimumCount?: number; deadline?: number; canApprove?: boolean; stageIdentifier?: string };
-  externalApproval?: { planExecutionId: string; approvalType: 'Jira' | 'ServiceNow'; ticketId: string; ticketUrl?: string; projectKey?: string; issueType?: string; ticketType?: string; approvalCriteria?: string; rejectionCriteria?: string; stageIdentifier?: string };
+  approvals?: Record<string, { planExecutionId: string; nodeId: string; approvalInstanceId?: string; approvers?: string[]; userGroups?: string[]; minimumCount?: number; deadline?: number; canApprove?: boolean; stageIdentifier?: string }>;
+  externalApprovals?: Record<string, { planExecutionId: string; nodeId: string; approvalType: 'Jira' | 'ServiceNow'; ticketId: string; ticketUrl?: string; projectKey?: string; issueType?: string; ticketType?: string; approvalCriteria?: string; rejectionCriteria?: string; stageIdentifier?: string }>;
   cost?:  { totalCost?: number; currency?: string; branchAvgCost?: number };
   sto?:   { count: number; critical: number; high: number; medium: number };
   stoScan?: StoScanSummary;
@@ -660,6 +660,7 @@ window.addEventListener('message', ({ data: msg }) => {
         endTs:             ex.endTs,
         moduleInfo:        ex.moduleInfo,
         executionTriggerInfo: (ex as any).executionTriggerInfo ?? prev?.executionTriggerInfo,
+        yamlVersion:       (ex as { yamlVersion?: string }).yamlVersion ?? prev?.yamlVersion,
         layoutNodeMap,
         executionGraph,
         isTerminal,
@@ -669,8 +670,8 @@ window.addEventListener('message', ({ data: msg }) => {
         stepLogs:          prev?.stepLogs ?? {},
         activeStageId:     prev?.activeStageId,
         aida: prev?.aida, opa: opaData, cost: prev?.cost,
-        approval: isTerminal ? undefined : prev?.approval,
-        externalApproval: isTerminal ? undefined : prev?.externalApproval,
+        approvals: isTerminal ? undefined : prev?.approvals,
+        externalApprovals: isTerminal ? undefined : prev?.externalApprovals,
         sto: prev?.sto,   ti: prev?.ti,   ssca: prev?.ssca, cd: prev?.cd,
         stoScan: prev?.stoScan,
       });
@@ -694,18 +695,20 @@ window.addEventListener('message', ({ data: msg }) => {
         const ex = state.executions.get(state.detailExecId);
         if (ex) {
           const prev = ex.stepLogs[nodeId] ?? [];
-          ex.stepLogs[nodeId] = [...prev, ...msg.lines].slice(-100);
+          const next = msg.replace ? msg.lines : [...prev, ...msg.lines].slice(-100);
+          ex.stepLogs[nodeId] = next;
           ex.activeStageId = nodeId;
-          ex.logLines = [...ex.logLines, ...msg.lines].slice(-100);
+          ex.logLines = msg.replace ? msg.lines : [...ex.logLines, ...msg.lines].slice(-100);
           foundExecution = true;
         }
       } else {
         // In live mode, store in any execution (there should be only one)
         for (const [, ex] of state.executions) {
           const prev = ex.stepLogs[nodeId] ?? [];
-          ex.stepLogs[nodeId] = [...prev, ...msg.lines].slice(-100);
+          const next = msg.replace ? msg.lines : [...prev, ...msg.lines].slice(-100);
+          ex.stepLogs[nodeId] = next;
           ex.activeStageId = nodeId;
-          ex.logLines = [...ex.logLines, ...msg.lines].slice(-100);
+          ex.logLines = msg.replace ? msg.lines : [...ex.logLines, ...msg.lines].slice(-100);
           foundExecution = true;
           break;
         }
@@ -741,8 +744,7 @@ window.addEventListener('message', ({ data: msg }) => {
 
     case 'APPROVAL_UPDATE':
       console.log('[Webview] APPROVAL_UPDATE received:', msg);
-      // Set approval only on the execution that matches planExecutionId
-      // (not all executions, which would incorrectly set approval on the wrong pipeline)
+      // Set approvals only on the execution that matches planExecutionId.
       let approvalEx = state.executions.get(msg.planExecutionId);
       if (!approvalEx) {
         // Execution doesn't exist yet (APPROVAL_UPDATE arrived before HISTORY_DETAIL)
@@ -764,38 +766,53 @@ window.addEventListener('message', ({ data: msg }) => {
         };
         state.executions.set(msg.planExecutionId, approvalEx);
       }
-      approvalEx.approval = {
-        planExecutionId:  msg.planExecutionId,
-        approvers:        msg.approvers,
-        userGroups:       msg.userGroups,
-        minimumCount:     msg.minimumCount,
-        deadline:         msg.deadline,
-        canApprove:       msg.canApprove ?? true,
-        stageIdentifier:  msg.stageIdentifier,
-      };
-      console.log('[Webview] Set approval on execution:', {
-        planExecutionId: approvalEx.planExecutionId,
-        approval: approvalEx.approval
-      });
+      approvalEx.approvals = Object.fromEntries((msg.approvals ?? []).map(approval => [approval.nodeId, {
+        planExecutionId: msg.planExecutionId,
+        nodeId: approval.nodeId,
+        approvalInstanceId: approval.approvalInstanceId,
+        approvers: approval.approvers,
+        userGroups: approval.userGroups,
+        minimumCount: approval.minimumCount,
+        deadline: approval.deadline,
+        canApprove: approval.canApprove ?? true,
+        stageIdentifier: approval.stageIdentifier,
+      }]));
       break;
 
-    case 'EXTERNAL_APPROVAL_UPDATE':
-      const extApprovalEx = state.executions.get(msg.planExecutionId);
-      if (extApprovalEx) {
-        extApprovalEx.externalApproval = {
-          planExecutionId:    msg.planExecutionId,
-          approvalType:       msg.approvalType,
-          ticketId:           msg.ticketId,
-          ticketUrl:          msg.ticketUrl,
-          projectKey:         msg.projectKey,
-          issueType:          msg.issueType,
-          ticketType:         msg.ticketType,
-          approvalCriteria:   msg.approvalCriteria,
-          rejectionCriteria:  msg.rejectionCriteria,
-          stageIdentifier:    msg.stageIdentifier,
+    case 'EXTERNAL_APPROVAL_UPDATE': {
+      let extApprovalEx = state.executions.get(msg.planExecutionId);
+      if (!extApprovalEx) {
+        extApprovalEx = {
+          planExecutionId: msg.planExecutionId,
+          pipelineIdentifier: '',
+          name: '',
+          status: 'APPROVALWAITING',
+          startTs: 0,
+          endTs: 0,
+          moduleInfo: {},
+          layoutNodeMap: {},
+          executionGraph: null,
+          isTerminal: false,
+          logLines: [],
+          stepLogs: {},
         };
+        state.executions.set(msg.planExecutionId, extApprovalEx);
       }
+      extApprovalEx.externalApprovals = Object.fromEntries((msg.approvals ?? []).map(approval => [approval.nodeId, {
+        planExecutionId: msg.planExecutionId,
+        nodeId: approval.nodeId,
+        approvalType: approval.approvalType,
+        ticketId: approval.ticketId,
+        ticketUrl: approval.ticketUrl,
+        projectKey: approval.projectKey,
+        issueType: approval.issueType,
+        ticketType: approval.ticketType,
+        approvalCriteria: approval.approvalCriteria,
+        rejectionCriteria: approval.rejectionCriteria,
+        stageIdentifier: approval.stageIdentifier,
+      }]));
       break;
+    }
 
     case 'STO_SUMMARY':
       for (const [, ex] of state.executions) {
@@ -903,7 +920,7 @@ window.addEventListener('message', ({ data: msg }) => {
         triggerType: (historyItem.triggerInfo as any).triggerType,
         triggeredBy: historyItem.triggerInfo.triggeredBy
       } : undefined;
-      // Preserve approval/externalApproval from earlier messages if not in msg
+      // Preserve per-step approvals from earlier messages if not in msg
       const prev = state.executions.get(ex.planExecutionId);
 
       // Extract OPA data from governanceMetadata if present
@@ -935,6 +952,7 @@ window.addEventListener('message', ({ data: msg }) => {
         endTs:             ex.endTs,
         moduleInfo:        ex.moduleInfo,
         executionTriggerInfo,
+        yamlVersion:       (ex as { yamlVersion?: string }).yamlVersion ?? prev?.yamlVersion,
         layoutNodeMap,
         executionGraph,
         isTerminal,
@@ -943,8 +961,8 @@ window.addEventListener('message', ({ data: msg }) => {
         logLines:          [],
         stepLogs:          {},
         aida: msg.aida, opa: opaData, cost: msg.cost,
-        approval: msg.approval ?? prev?.approval,
-        externalApproval: msg.externalApproval ?? prev?.externalApproval,
+        approvals: (msg.approval as ExecState['approvals']) ?? prev?.approvals,
+        externalApprovals: (msg.externalApproval as ExecState['externalApprovals']) ?? prev?.externalApprovals,
         sto: msg.sto,   ti: msg.ti,   ssca: msg.ssca, cd: msg.cd,
         stoScan: prev?.stoScan,
       });
@@ -1229,85 +1247,8 @@ function dotClass(s: string, endTs?: number): string {
   }
 }
 
-function getStages(layoutNodeMap: Record<string, LayoutNode>): LayoutNode[] {
-  // Get all STAGE nodes - include looped iterations but filter STRATEGY containers
-  // STRATEGY nodeGroup indicates loop/matrix wrappers, not actual executable stages
-  const allEntries = Object.entries(layoutNodeMap).filter(([, n]) =>
-    n.nodeGroup === 'STAGE'
-  );
-  if (!allEntries.length) return [];
-
-  // Helper to check if stage should be excluded from output
-  const shouldExclude = (s: LayoutNode): boolean => {
-    // Skip parallel wrapper nodes (they're containers, not actual stages)
-    if (s.nodeType === 'parallel') return true;
-
-    // Check for rollback indicators
-    const isRollback = s.stepType === 'PIPELINE_ROLLBACK' ||
-                       s.stepType === 'STAGE_ROLLBACK' ||
-                       s.nodeType === 'PIPELINE_ROLLBACK' ||
-                       s.nodeType === 'STAGE_ROLLBACK' ||
-                       s.name?.toLowerCase().includes('rollback');
-
-    // Skip untriggered rollback stages
-    if (isRollback) {
-      const notExecuted = !s.startTs || s.status === 'NOT_STARTED' || s.status === 'SKIPPED';
-      return notExecuted;
-    }
-
-    return false;
-  };
-
-  // Map by execution ID (unique even for looped stages) AND by nodeUuid (for nextIds lookup)
-  const byExecutionId = new Map(allEntries);
-  const byUuid = new Map<string, Array<[string, LayoutNode]>>();
-  for (const [execId, stage] of allEntries) {
-    if (!byUuid.has(stage.nodeUuid)) byUuid.set(stage.nodeUuid, []);
-    byUuid.get(stage.nodeUuid)!.push([execId, stage]);
-  }
-
-  // Find roots - stages not referenced by any other stage's nextIds
-  const referenced = new Set(allEntries.flatMap(([, s]) => s.edgeLayoutList?.nextIds ?? []));
-  let roots = allEntries.filter(([execId]) => !referenced.has(execId));
-  if (!roots.length) roots = [allEntries[0]];
-
-  const ordered: LayoutNode[] = [];
-  const visited = new Set<string>();
-  const queue = roots.map(([execId]) => execId);
-
-  while (queue.length) {
-    const execId = queue.shift()!;
-    if (visited.has(execId)) continue;
-    visited.add(execId);
-
-    const stage = byExecutionId.get(execId);
-    if (!stage) continue;
-
-    // Add to output only if not excluded
-    if (!shouldExclude(stage)) {
-      ordered.push(stage);
-    }
-
-    // Follow nextIds to continue traversal
-    for (const nextId of stage.edgeLayoutList?.nextIds ?? []) {
-      if (!visited.has(nextId)) queue.push(nextId);
-    }
-  }
-
-  // Append any stages not reachable via chain (handles looped stages with shared nodeUuid)
-  for (const [execId, stage] of allEntries) {
-    if (!visited.has(execId) && !shouldExclude(stage)) {
-      ordered.push(stage);
-    }
-  }
-
-  // Sort by start time to ensure correct execution order (handles parallel stages correctly)
-  // Stages without startTs (Skipped, NotStarted) sort to the end
-  return ordered.sort((a, b) => {
-    const aTime = a.startTs ?? Number.MAX_SAFE_INTEGER;
-    const bTime = b.startTs ?? Number.MAX_SAFE_INTEGER;
-    return aTime - bTime;
-  });
+function getStages(ex: ExecState): LayoutNode[] {
+  return listLayoutStages(ex.layoutNodeMap, ex.executionGraph, ex.yamlVersion);
 }
 
 function getFailureMessage(ex: ExecState): string | null {
@@ -1369,136 +1310,10 @@ function isStageExpanded(stageId: string): boolean {
   return state.expandedStagesDefault.has(stageId);
 }
 
-// Stage boundary types — these mark the start of a NEW stage; stop traversal here.
-const STAGE_TYPES = new Set([
-  'IntegrationStageStepPMS',  // CI stage
-  'PIPELINE_STAGE',           // generic stage
-  'PIPELINE_ROLLBACK',        // rollback stage
-  'STAGE_ROLLBACK',
-  'DeploymentStageStepPMS',   // CD stage
-  'ApprovalStageStepPMS',     // approval stage (PascalCase)
-  'APPROVAL_STAGE',           // approval stage (SCREAMING_SNAKE_CASE)
-  'CustomStageStepPMS',       // custom stage
-  'IDPStage',                 // IDP stage
-  'CUSTOM_STAGE',             // custom stage (SCREAMING_SNAKE_CASE)
-]);
-
-// Container node types — drill through these, don't surface as steps.
-const CONTAINER_TYPES = new Set([
-  'NG_SECTION', 'NG_SECTION_WITH_ROLLBACK_INFO', 'FORK', 'NG_FORK', 'ROLLBACK_OPTIONAL_CHILD_CHAIN',
-  'PIPELINE', 'PIPELINE_SECTION',
-  'BARRIER', 'QUEUE', 'STRATEGY',
-  'STEP_GROUP', 'CI_STEP_GROUP',
-  'INFRASTRUCTURE_SECTION', 'GITOPS_CLUSTERS', 'SPEC',
-  'STAGES_STEP',       // top-level stages container
-  'NG_EXECUTION',      // execution wrapper inside a stage
-  'liteEngineTask',    // CI k8s/drone wrapper (camelCase from API)
-  'LITEENGINE_TASK',
-]);
-
-function collectSteps(
-  nodeId: string,
-  nodeMap: Record<string, GraphNode>,
-  adjList: Record<string, { children?: string[]; nextIds?: string[] }>,
-  depth: number,
-  visited: Set<string>,
-  parentGroupName?: string
-): StepInfo[] {
-  if (depth > 15 || visited.has(nodeId)) return [];
-  visited.add(nodeId);
-
-  const node = nodeMap[nodeId];
-  if (!node) return [];
-
-  // Stop at stage boundaries — this node belongs to a different stage
-  if (STAGE_TYPES.has(node.stepType ?? '')) return [];
-
-  const adj      = adjList[nodeId] ?? {};
-  const children = [...(adj.children ?? [])];
-  const nextIds  = [...(adj.nextIds ?? [])];
-
-  // Capture step group name to pass into children
-  const isStepGroup = node.stepType === 'STEP_GROUP' || node.stepType === 'CI_STEP_GROUP';
-  const groupNameForChildren = isStepGroup ? (node.name || parentGroupName) : parentGroupName;
-
-  if (!CONTAINER_TYPES.has(node.stepType ?? '') && node.name) {
-    // Leaf step — emit it, then follow sequential chain (but not into other stages)
-    const step: StepInfo = {
-      name: node.name,
-      status: node.status,
-      startTs: node.startTs,
-      endTs: node.endTs,
-      nodeId,
-      logBaseKey: node.logBaseKey,
-      stepType: node.stepType,
-      identifier: node.identifier,
-      parentGroupName,
-    };
-    const rest = nextIds.flatMap(id => collectSteps(id, nodeMap, adjList, depth + 1, visited, parentGroupName));
-    return [step, ...rest];
-  }
-
-  // Container — drill into children and follow next chain
-  const fromChildren = children.flatMap(id => collectSteps(id, nodeMap, adjList, depth + 1, visited, groupNameForChildren));
-  const fromNext     = nextIds.flatMap(id => collectSteps(id, nodeMap, adjList, depth + 1, visited, parentGroupName));
-  return [...fromChildren, ...fromNext];
-}
-
-function getStepsForStage(
-  stage: LayoutNode,
-  layoutNodeMap: Record<string, LayoutNode>,
-  graph?: ExecGraph | null
-): StepInfo[] {
-  // Strategy 1: executionGraph — find stage by UUID then by name
-  if (graph?.nodeMap && graph.nodeAdjacencyListMap) {
-    let stageGraphId: string | undefined;
-
-    // UUID match (most reliable)
-    if (stage.nodeUuid && graph.nodeAdjacencyListMap[stage.nodeUuid]) {
-      stageGraphId = stage.nodeUuid;
-    }
-    // Name match fallback - must match stage-level nodes only (baseFqn pattern: "pipeline.stages.StageName")
-    // Not step-level nodes (baseFqn pattern: "pipeline.stages.StageName.spec.execution.steps.StepName")
-    if (!stageGraphId) {
-      stageGraphId = Object.entries(graph.nodeMap).find(
-        ([, n]) => n.name === stage.name &&
-                   n.baseFqn?.startsWith('pipeline.stages.') &&
-                   !n.baseFqn?.includes('.spec.')
-      )?.[0];
-    }
-
-    if (stageGraphId) {
-      const visited = new Set<string>([stageGraphId]);
-      const adj = graph.nodeAdjacencyListMap[stageGraphId] ?? {};
-      // Only seed from children — nextIds at the stage level points to the NEXT
-      // stage, not steps within this stage. collectSteps follows nextIds internally.
-      const seeds = [...(adj.children ?? [])];
-      const steps = seeds.flatMap(id =>
-        collectSteps(id, graph.nodeMap!, graph.nodeAdjacencyListMap!, 0, visited)
-      );
-      if (steps.length) return steps;
-    }
-  }
-
-  // Strategy 2: layoutNodeMap children (stage's edgeLayoutList)
-  const childIds = stage.edgeLayoutList?.currentNodeChildren ?? [];
-  const layoutSteps = childIds
-    .map(id => layoutNodeMap[id])
-    .filter((n): n is LayoutNode => !!n && n.nodeGroup !== 'STAGE')
-    .map((n): StepInfo => ({ name: n.name, status: n.status, startTs: n.startTs, endTs: n.endTs }));
-  if (layoutSteps.length) return layoutSteps;
-
-  // Strategy 3: all non-STAGE nodes in layoutNodeMap that aren't other stages
-  // (last resort — shows something even if parent-child relationship is missing)
-  const allNonStage = Object.values(layoutNodeMap).filter(
-    n => n.nodeGroup !== 'STAGE' && n.nodeGroup !== undefined && n.name
-  ).map((n): StepInfo => ({ name: n.name, status: n.status, startTs: n.startTs, endTs: n.endTs }));
-  return allNonStage;
-}
 
 // ── Debug panel — shows raw API data to diagnose step/status issues ──────────
 function debugPanel(ex: ExecState): string {
-  const stages = getStages(ex.layoutNodeMap);
+  const stages = getStages(ex);
   const layoutGroups = [...new Set(Object.values(ex.layoutNodeMap).map(n => n.nodeGroup ?? '—'))];
   const graphNodeTypes = ex.executionGraph?.nodeMap
     ? [...new Set(Object.values(ex.executionGraph.nodeMap).map((n: GraphNode) => n.stepType ?? '—'))].join(', ')
@@ -1790,7 +1605,7 @@ function pinFooter(): string {
 
 // Tool metadata
 const AI_TOOL_META: Record<string, { name: string; sub: string | null }> = {
-  'claudecode-cli': { name: 'Claude Code', sub: 'CLI' },
+  'claudecode-cli': { name: 'Claude Code', sub: 'Terminal' },
   'claudecode-ext': { name: 'Claude Code', sub: 'Extension' },
   'cursor': { name: 'Cursor', sub: null },
   'copilot': { name: 'GitHub Copilot', sub: null },
@@ -3277,7 +3092,7 @@ function deployTabBody(ex: ExecState): string {
 // ── Execution card ─────────────────────────────────────────────────────────
 function execCard(ex: ExecState): string {
   const isRunning = !ex.isTerminal;
-  const stages    = getStages(ex.layoutNodeMap);
+  const stages    = getStages(ex);
   const modKeys   = getModuleKeys(ex.moduleInfo);
   const parts: string[] = [];
   const terminal = TERMINAL_STATUSES_SET.has(ex.status); // Used by both themes
@@ -3665,7 +3480,7 @@ function execCard(ex: ExecState): string {
         : (isActive || ex.isTerminal || normalizedExecStatus === 'APPROVALWAITING'); // Simple: old logic
 
       if (showSteps) {
-        const steps = getStepsForStage(stage, ex.layoutNodeMap, ex.executionGraph);
+        const steps = stepsForStage(stage, ex.layoutNodeMap, ex.executionGraph, ex.yamlVersion);
 
         // Enhanced theme: wrap steps in container with tree connector
         if (state.webviewTheme === 'enhanced' && steps.length > 0) {
@@ -3673,6 +3488,21 @@ function execCard(ex: ExecState): string {
         }
 
         for (const step of steps) {
+          const depth = step.depth ?? 0;
+          const indentSpan = depth > 0 ? `<span class="step-indent" style="width:${depth * 14}px"></span>` : '';
+          if (step.isGroup) {
+            const groupFailed = step.status === 'FAILED' || step.status === 'IGNOREFAILED';
+            const groupClass = state.webviewTheme === 'enhanced'
+              ? (groupFailed ? ' is-failed' : '')
+              : (groupFailed ? ' failed' : '');
+            const iconClass = state.webviewTheme === 'enhanced' ? 'step-stat' : 'step-icon';
+            parts.push(`<div class="step-row step-group${groupClass}">
+              ${indentSpan}<span class="${iconClass}">${stageIcon(step.status)}</span>
+              <span class="step-name">${esc(step.name)}</span>
+              <span class="step-dur" data-start-ts="${step.startTs || 0}" data-end-ts="${step.endTs || 0}">${dur(step.startTs, step.endTs)}</span>
+            </div>`);
+            continue;
+          }
           const stepActive   = step.status === 'RUNNING' || step.status === 'ASYNC_WAITING';
           const stepFailed   = step.status === 'FAILED';
           const stepWarning  = step.status === 'IGNOREFAILED';
@@ -3689,8 +3519,10 @@ function execCard(ex: ExecState): string {
           const isWaitingForApproval = normalizedStatus === 'APPROVALWAITING' ||
                                        normalizedStatus === 'ASYNCWAITING' ||
                                        normalizedStatus === 'RUNNING';
-          const hasApprovalCard = ((isApprovalStep && ex.approval && !ex.isTerminal) ||
-                                   (isExternalApprovalStep && ex.externalApproval && !ex.isTerminal)) &&
+          const stepApproval = step.nodeId ? ex.approvals?.[step.nodeId] : undefined;
+          const stepExternalApproval = step.nodeId ? ex.externalApprovals?.[step.nodeId] : undefined;
+          const hasApprovalCard = ((isApprovalStep && stepApproval && !ex.isTerminal) ||
+                                   (isExternalApprovalStep && stepExternalApproval && !ex.isTerminal)) &&
                                    isWaitingForApproval;
 
           // Auto-expand approval steps to show the approval card
@@ -3736,7 +3568,7 @@ function execCard(ex: ExecState): string {
             const tipLabel = isAgentStep ? 'View agent chat' : 'View step logs';
 
             parts.push(`<button class="step-row${isExpanded ? ' on' : ''}${stepStatusClass ? ' ' + stepStatusClass : ''}${clickable}" data-action="toggleStep"${nodeAttr}${logKeyAttr}${stepNameAttr}${stageNameAttr}${pipelineNameAttr}${planIdAttr}${statusAttr}${durationAttr}${stepTypeAttr}${agentAttr}>
-              <span class="step-stat">${stageIcon(step.status)}</span>
+              ${indentSpan}<span class="step-stat">${stageIcon(step.status)}</span>
               <span class="step-name">${esc(displayName)}</span>
               <span class="step-dur" data-start-ts="${step.startTs || 0}" data-end-ts="${step.endTs || 0}">${dur(step.startTs, step.endTs)}</span>
               ${canExpand ? `<span class="tip-wrap"><span class="step-ext">${extIcon}</span><span class="tip">${tipLabel}</span></span>` : ''}
@@ -3747,19 +3579,18 @@ function execCard(ex: ExecState): string {
             const extIcon = showExtIcon ? `<span class="tip-wrap"><span class="step-ext-ic">↗</span><span class="tip">${isAgentStep ? 'View agent chat' : 'View step logs'}</span></span>` : '';
 
             parts.push(`<div class="step-row${stepActive ? ' step-running' : ''}${stepFailed ? ' failed' : ''}${stepWarning ? ' warning' : ''}${clickable}" data-action="toggleStep"${nodeAttr}${logKeyAttr}${stepNameAttr}${stageNameAttr}${pipelineNameAttr}${planIdAttr}${statusAttr}${durationAttr}${stepTypeAttr}${agentAttr}>
-              <span class="step-toggle${isLoading ? ' step-loading' : ''}">${toggleIcon}</span>
+              ${indentSpan}<span class="step-toggle${isLoading ? ' step-loading' : ''}">${toggleIcon}</span>
               <span class="step-icon">${stageIcon(step.status)}</span>
               <span class="step-name">${esc(displayName)}${extIcon}</span>
               <span class="step-dur" data-start-ts="${step.startTs || 0}" data-end-ts="${step.endTs || 0}">${dur(step.startTs, step.endTs)}</span>
             </div>`);
           }
 
-          if (isApprovalStep && ex.approval && !ex.isTerminal && isWaitingForApproval) {
-            // Render Harness approval card inside the approval step (only if actively waiting)
-            parts.push(approvalCard(ex.approval, ex.harnessUrl));
-          } else if (isExternalApprovalStep && ex.externalApproval && !ex.isTerminal && isWaitingForApproval) {
-            // Render external approval card inside the approval step (only if actively waiting)
-            parts.push(externalApprovalCard(ex.externalApproval));
+          if (isApprovalStep && stepApproval && !ex.isTerminal && isWaitingForApproval) {
+            // Render this step's own approval card. Other waiting steps keep theirs.
+            parts.push(approvalCard(stepApproval, ex.harnessUrl));
+          } else if (isExternalApprovalStep && stepExternalApproval && !ex.isTerminal && isWaitingForApproval) {
+            parts.push(externalApprovalCard(stepExternalApproval));
           } else if (isExpanded) {
             // Regular log display for non-approval steps
             if (isLoading) {
@@ -3905,7 +3736,7 @@ function aidaCard(ex: ExecState): string {
   </div>`;
 }
 
-function approvalCard(a: NonNullable<ExecState['approval']>, harnessUrl?: string): string {
+function approvalCard(a: NonNullable<NonNullable<ExecState['approvals']>[string]>, harnessUrl?: string): string {
   const who: string[] = [];
   if (a.userGroups?.length)  who.push(...a.userGroups);
   if (a.approvers?.length)   who.push(...a.approvers);
@@ -3925,8 +3756,8 @@ function approvalCard(a: NonNullable<ExecState['approval']>, harnessUrl?: string
 
     const actionsHtml = a.canApprove !== false
       ? `<div class="approval-acts">
-          <button class="btn-approve" data-action="approve" data-id="${esc(a.planExecutionId)}">${checkIcon} Approve</button>
-          <button class="btn-reject" data-action="reject" data-id="${esc(a.planExecutionId)}">${xIcon} Reject</button>
+          <button class="btn-approve" data-action="approve" data-id="${esc(a.planExecutionId)}" data-nodeid="${esc(a.nodeId)}" data-instance="${esc(a.approvalInstanceId ?? '')}">${checkIcon} Approve</button>
+          <button class="btn-reject" data-action="reject" data-id="${esc(a.planExecutionId)}" data-nodeid="${esc(a.nodeId)}" data-instance="${esc(a.approvalInstanceId ?? '')}">${xIcon} Reject</button>
         </div>`
       : `<div style="padding: 6px 10px; font-size: 11px; color: var(--fg-2); font-style: italic;">You are not in the approver list for this step.</div>`;
 
@@ -3963,8 +3794,8 @@ function approvalCard(a: NonNullable<ExecState['approval']>, harnessUrl?: string
 
   const actionsHtml = a.canApprove !== false
     ? `<div class="approval-actions">
-        <button class="approval-btn approval-approve" data-action="approve" data-id="${esc(a.planExecutionId)}">✓ Approve</button>
-        <button class="approval-btn approval-reject"  data-action="reject"  data-id="${esc(a.planExecutionId)}">✕ Reject</button>
+        <button class="approval-btn approval-approve" data-action="approve" data-id="${esc(a.planExecutionId)}" data-nodeid="${esc(a.nodeId)}" data-instance="${esc(a.approvalInstanceId ?? '')}">✓ Approve</button>
+        <button class="approval-btn approval-reject"  data-action="reject"  data-id="${esc(a.planExecutionId)}" data-nodeid="${esc(a.nodeId)}" data-instance="${esc(a.approvalInstanceId ?? '')}">✕ Reject</button>
       </div>`
     : `<div class="approval-no-permission">You are not in the approver list for this step.</div>`;
 
@@ -3980,7 +3811,7 @@ function approvalCard(a: NonNullable<ExecState['approval']>, harnessUrl?: string
   </div>`;
 }
 
-function externalApprovalCard(a: NonNullable<ExecState['externalApproval']>): string {
+function externalApprovalCard(a: NonNullable<NonNullable<ExecState['externalApprovals']>[string]>): string {
   const icon = a.approvalType === 'Jira' ? '🎫' : '📋';
   const ticketLink = a.ticketUrl
     ? `<a class="approval-open-link" data-action="openUrl" data-url="${esc(a.ticketUrl)}">${esc(a.ticketId)} ↗</a>`
@@ -4183,6 +4014,22 @@ function renderPanelE(): string {
   </div>`;
 }
 
+const HARNESS_SIGNUP_URL = 'https://app.harness.io/auth/signup?utm_source=harness_vscode_extension&utm_medium=cta&utm_campaign=platform#/signup';
+
+function signupCard(): string {
+  return `<a class="signup-card" data-action="openUrl" data-url="${esc(HARNESS_SIGNUP_URL)}">
+    <span class="signup-card-mark" aria-hidden="true">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M7 1.5v11M1.5 7h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <span class="signup-card-copy">
+      <span class="signup-card-title">Don't have an account?</span>
+      <span class="signup-card-cta">Start for free <span aria-hidden="true">→</span></span>
+    </span>
+  </a>`;
+}
+
 function renderPanelD(): string {
   // Shield icon for footnote (11x11)
   const shieldIcon = `<svg width="11" height="11" viewBox="0 0 12 12" style="flex-shrink:0;margin-top:1px">
@@ -4239,6 +4086,8 @@ function renderPanelD(): string {
 
     <!-- Primary button -->
     <button style="width:100%;padding:8px 14px;background:var(--accent);color:#0E1013;border:none;border-radius:var(--r);font-family:var(--font-sans);font-size:11.5px;font-weight:600;letter-spacing:0.1px;cursor:pointer;margin-bottom:14px" data-action="configure" onmouseover="this.style.filter='brightness(1.08)'" onmouseout="this.style.filter=''" onmousedown="this.style.filter='brightness(0.95)'" onmouseup="this.style.filter='brightness(1.08)'">Start setup</button>
+
+    ${signupCard()}
 
     <!-- Env disclosure link -->
     <div style="text-align:center;margin-bottom:18px">
@@ -4799,7 +4648,13 @@ function bind(): void {
       const action = el.dataset['action'] === 'reject' ? 'REJECT' : 'APPROVE';
       if (!id) return;
       el.setAttribute('disabled', 'true');
-      vscode.postMessage({ type: 'approval', planExecutionId: id, action });
+      vscode.postMessage({
+        type: 'approval',
+        planExecutionId: id,
+        nodeId: el.dataset['nodeid'],
+        approvalInstanceId: el.dataset['instance'] || undefined,
+        action,
+      });
     });
   });
 
