@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-11-26
+
+### Fixed
+- **Harness approvals with runtime inputs**: The Pipeline view now prompts for all inputs, lets users go back or edit answers before submitting, and leaves the step waiting if they cancel. Only one approval action can be active at a time.
+
 ## [0.1.11] - 2026-10-23
 
 ### Added

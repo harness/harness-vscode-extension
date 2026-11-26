@@ -68,6 +68,65 @@ export function selectApprovalInstanceId(
   return instances.length === 1 ? instances[0].id : undefined;
 }
 
+export interface ApproverInputField {
+  name: string;
+  defaultValue?: string;
+  description?: string;
+  required: boolean;
+  choices: string[];
+}
+
+function parseChoices(value: unknown): string[] | undefined {
+  if (value == null) return [];
+  return Array.isArray(value) && value.every(choice => typeof choice === 'string' && choice.length > 0)
+    ? value as string[]
+    : undefined;
+}
+
+/** Accept only the verified v1 list response for an approval that will be submitted. */
+export function parseWaitingApproval(
+  payload: unknown,
+  nodeExecutionId: string,
+  expectedInstanceId?: string,
+): { id: string; fields: ApproverInputField[] } | undefined {
+  // The endpoint is scoped to the clicked node. Its response can omit the node ID,
+  // so require exactly one row and cross-check the graph's instance ID when present.
+  if (!Array.isArray(payload) || payload.length !== 1) return undefined;
+  const row = asRecord(payload[0]);
+  const details = asRecord(row?.details);
+  if (!row || typeof row.id !== 'string' || !row.id || row.type !== 'HarnessApproval' || row.status !== 'WAITING'
+      || (expectedInstanceId !== undefined && row.id !== expectedInstanceId)
+      || !Array.isArray(details?.approverInputs)) return undefined;
+  const reportedNodeIds = [row.nodeExecutionId, row.node_execution_id, details.nodeExecutionId, details.node_execution_id];
+  if (reportedNodeIds.some(id => id != null && id !== nodeExecutionId)) return undefined;
+
+  const fields: ApproverInputField[] = [];
+  const names = new Set<string>();
+  const supportedKeys = new Set(['name', 'defaultValue', 'description', 'required', 'allowedValues', 'selectOneFrom', 'regex']);
+  for (const entry of details.approverInputs) {
+    const field = asRecord(entry);
+    if (!field || typeof field.name !== 'string' || !field.name.trim() || names.has(field.name)
+        || Object.keys(field).some(key => !supportedKeys.has(key))
+        || (field.defaultValue != null && typeof field.defaultValue !== 'string')
+        || (field.description != null && typeof field.description !== 'string')
+        || (field.required !== undefined && typeof field.required !== 'boolean')
+        // Server-side regex semantics are not verified in the native editor.
+        || (field.regex != null && field.regex !== '')) return undefined;
+    const allowed = parseChoices(field.allowedValues);
+    const selectOne = parseChoices(field.selectOneFrom);
+    if (!allowed || !selectOne || (allowed.length && selectOne.length)) return undefined;
+    names.add(field.name);
+    fields.push({
+      name: field.name,
+      defaultValue: typeof field.defaultValue === 'string' ? field.defaultValue : undefined,
+      description: typeof field.description === 'string' ? field.description : undefined,
+      required: field.required === true,
+      choices: [...new Set(selectOne.length ? selectOne : allowed)],
+    });
+  }
+  return { id: row.id, fields };
+}
+
 export function approvalInstancesUrl(
   baseUrl: string,
   orgIdentifier: string,
