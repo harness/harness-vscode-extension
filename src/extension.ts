@@ -11,7 +11,7 @@ import { StatusBarItem } from './ui/statusBar';
 import { DiagnosticsManager } from './features/diagnosticsManager';
 import { TiCodeActionProvider } from './features/tiAnnotations';
 import { registerFfDecorations } from './features/ffDecorations';
-import { submitApproval } from './api/approvalService';
+import { approvalBack, submitApproval } from './api/approvalService';
 import type { ApproverInputField } from './api/approvalInstances';
 import { rerunPipeline } from './api/rerunService';
 import { abortExecution, InterruptType } from './api/abortService';
@@ -33,24 +33,66 @@ import { migrateAiSettings, readAiDestination, readPreferredExternalToolId, setA
 import { logger } from './utils/logger';
 import { configureProxy, registerProxyConfigWatcher } from './utils/proxy';
 
-async function promptForApprovalInput(field: ApproverInputField, step: number, total: number): Promise<string | undefined> {
+function showApprovalQuickInput<T>(
+  input: vscode.QuickInput & Pick<vscode.InputBox, 'buttons' | 'onDidAccept' | 'onDidTriggerButton'>,
+  canGoBack: boolean,
+  accept: () => T | undefined,
+): Promise<T | typeof approvalBack | undefined> {
+  input.ignoreFocusOut = true;
+  input.buttons = canGoBack ? [vscode.QuickInputButtons.Back] : [];
+  return new Promise<T | typeof approvalBack | undefined>(resolve => {
+    input.onDidHide(() => resolve(undefined));
+    input.onDidTriggerButton(button => {
+      if (button === vscode.QuickInputButtons.Back) resolve(approvalBack);
+    });
+    input.onDidAccept(() => {
+      const result = accept();
+      if (result !== undefined) resolve(result);
+    });
+    input.show();
+  }).finally(() => input.dispose());
+}
+
+function promptForApprovalInput(field: ApproverInputField, step: number, total: number, previousValue: string | undefined, canGoBack: boolean) {
   const title = `Harness Approve (${step} of ${total}): ${field.name}`;
   const hint = [field.required ? 'Required' : 'Optional', field.description].filter(Boolean).join(' — ');
   if (field.choices.length) {
+    const picker = vscode.window.createQuickPick<vscode.QuickPickItem & { value: string }>();
     const items = field.choices.map(value => ({ label: value, value, description: value === field.defaultValue ? 'Default' : undefined }));
     const defaultIndex = items.findIndex(item => item.value === field.defaultValue);
     if (defaultIndex > 0) items.unshift(...items.splice(defaultIndex, 1));
     if (!field.required) items.push({ label: 'Leave blank', value: '', description: undefined });
-    const selected = await vscode.window.showQuickPick(items, { title, placeHolder: hint, ignoreFocusOut: true });
-    return selected?.value;
+    picker.title = title;
+    picker.placeholder = hint;
+    picker.items = items;
+    const previous = items.find(item => item.value === previousValue);
+    if (previous) picker.activeItems = [previous];
+    return showApprovalQuickInput(picker, canGoBack, () => picker.selectedItems[0]?.value);
   }
-  return vscode.window.showInputBox({
-    title,
-    prompt: hint,
-    value: field.defaultValue,
-    ignoreFocusOut: true,
-    validateInput: value => field.required && !value.trim() ? 'Enter a value to continue.' : undefined,
+  const input = vscode.window.createInputBox();
+  input.title = title;
+  input.prompt = hint;
+  input.value = previousValue ?? field.defaultValue ?? '';
+  input.onDidChangeValue(() => { input.validationMessage = undefined; });
+  return showApprovalQuickInput(input, canGoBack, () => {
+    if (field.required && !input.value.trim()) {
+      input.validationMessage = 'Enter a value to continue.';
+      return undefined;
+    }
+    return input.value;
   });
+}
+
+function reviewApprovalInputs(values: readonly { name: string; value: string }[]) {
+  const picker = vscode.window.createQuickPick<vscode.QuickPickItem & { action?: number | 'approve' }>();
+  picker.title = 'Harness: Review and Approve';
+  picker.placeholder = 'Select a field to edit it, or choose Approve and Submit.';
+  picker.items = [
+    ...values.map(({ name, value }, index) => ({ label: name, detail: value === '' ? '(blank)' : value, action: index })),
+    { label: 'Action', kind: vscode.QuickPickItemKind.Separator },
+    { label: '$(check) Approve and Submit', action: 'approve' },
+  ];
+  return showApprovalQuickInput(picker, true, () => picker.selectedItems[0]?.action);
 }
 
 // Live log tailing (phase 2). One tail per step node; the extension does not
@@ -353,6 +395,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           nodeExecutionId: nodeId,
           approvalInstanceId,
           promptForInput: promptForApprovalInput,
+          reviewInputs: reviewApprovalInputs,
         });
         if (submitted) {
           const actionPastTense = action === 'REJECT' ? 'rejected' : 'approved';

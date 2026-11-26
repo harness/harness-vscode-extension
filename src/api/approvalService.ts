@@ -8,11 +8,38 @@ import {
   type ApproverInputField,
 } from './approvalInstances';
 
+export const approvalBack = Symbol('approvalBack');
+
+type ApprovalInputValue = { name: string; value: string };
 interface ApprovalOptions {
   comments?: string;
   nodeExecutionId?: string;
   approvalInstanceId?: string;
-  promptForInput: (field: ApproverInputField, step: number, total: number) => PromiseLike<string | undefined>;
+  promptForInput: (field: ApproverInputField, step: number, total: number, previousValue: string | undefined, canGoBack: boolean) => PromiseLike<string | typeof approvalBack | undefined>;
+  reviewInputs: (values: readonly ApprovalInputValue[]) => PromiseLike<number | 'approve' | typeof approvalBack | undefined>;
+}
+
+async function collectApprovalInputs(fields: ApproverInputField[], options: ApprovalOptions): Promise<ApprovalInputValue[] | undefined> {
+  if (!fields.length) return [];
+  const values: ApprovalInputValue[] = [];
+  let index = 0;
+  let editingFromReview = false;
+  for (;;) {
+    if (index === fields.length) {
+      const choice = await options.reviewInputs(values);
+      if (choice === undefined) return undefined;
+      if (choice === 'approve') return values;
+      index = choice === approvalBack ? fields.length - 1 : choice;
+      editingFromReview = true;
+      continue;
+    }
+
+    const field = fields[index];
+    const result = await options.promptForInput(field, index + 1, fields.length, values[index]?.value, editingFromReview || index > 0);
+    if (result === undefined) return undefined;
+    if (result !== approvalBack) values[index] = { name: field.name, value: result };
+    index = editingFromReview ? fields.length : result === approvalBack ? index - 1 : index + 1;
+  }
 }
 
 export async function submitApproval(
@@ -22,15 +49,13 @@ export async function submitApproval(
   options: ApprovalOptions,
 ): Promise<boolean> {
   let approvalInstanceId: string;
-  const approverInputs: Array<{ name: string; value: string }> = [];
+  let approverInputs: ApprovalInputValue[] = [];
   if (action === 'APPROVE') {
     const approval = await loadWaitingApproval(config, planExecutionId, options);
     approvalInstanceId = approval.id;
-    for (const [index, field] of approval.fields.entries()) {
-      const value = await options.promptForInput(field, index + 1, approval.fields.length);
-      if (value === undefined) return false;
-      approverInputs.push({ name: field.name, value });
-    }
+    const collected = await collectApprovalInputs(approval.fields, options);
+    if (!collected) return false;
+    approverInputs = collected;
   } else {
     approvalInstanceId = options.approvalInstanceId
       || await resolveWaitingInstanceId(config, planExecutionId, options.nodeExecutionId);
