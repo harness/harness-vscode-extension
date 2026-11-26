@@ -1152,6 +1152,14 @@ window.addEventListener('message', ({ data: msg }) => {
       scheduleRender(true);
       return;
 
+    case 'APPROVAL_RETRY':
+      document.querySelectorAll<HTMLButtonElement>('[data-action="approve"],[data-action="reject"]').forEach(button => {
+        if (button.dataset['id'] === msg.planExecutionId && button.dataset['nodeid'] === msg.nodeId) {
+          button.disabled = false;
+        }
+      });
+      return;
+
     case 'RERUN_CANCELLED':
     case 'RERUN_ERROR':
       // Re-enable rerun buttons

@@ -12,6 +12,7 @@ import { DiagnosticsManager } from './features/diagnosticsManager';
 import { TiCodeActionProvider } from './features/tiAnnotations';
 import { registerFfDecorations } from './features/ffDecorations';
 import { submitApproval } from './api/approvalService';
+import type { ApproverInputField } from './api/approvalInstances';
 import { rerunPipeline } from './api/rerunService';
 import { abortExecution, InterruptType } from './api/abortService';
 import { dispatchModules } from './pipeline/executionDispatcher';
@@ -31,6 +32,26 @@ import { launchAI } from './ai/launcher';
 import { migrateAiSettings, readAiDestination, readPreferredExternalToolId, setAiDestination, setPreferredExternalTool } from './ai/aiSettings';
 import { logger } from './utils/logger';
 import { configureProxy, registerProxyConfigWatcher } from './utils/proxy';
+
+async function promptForApprovalInput(field: ApproverInputField, step: number, total: number): Promise<string | undefined> {
+  const title = `Harness Approve (${step} of ${total}): ${field.name}`;
+  const hint = [field.required ? 'Required' : 'Optional', field.description].filter(Boolean).join(' — ');
+  if (field.choices.length) {
+    const items = field.choices.map(value => ({ label: value, value, description: value === field.defaultValue ? 'Default' : undefined }));
+    const defaultIndex = items.findIndex(item => item.value === field.defaultValue);
+    if (defaultIndex > 0) items.unshift(...items.splice(defaultIndex, 1));
+    if (!field.required) items.push({ label: 'Leave blank', value: '', description: undefined });
+    const selected = await vscode.window.showQuickPick(items, { title, placeHolder: hint, ignoreFocusOut: true });
+    return selected?.value;
+  }
+  return vscode.window.showInputBox({
+    title,
+    prompt: hint,
+    value: field.defaultValue,
+    ignoreFocusOut: true,
+    validateInput: value => field.required && !value.trim() ? 'Enter a value to continue.' : undefined,
+  });
+}
 
 // Live log tailing (phase 2). One tail per step node; the extension does not
 // keep a stream open indefinitely — see reconcileLogStreams() and ACTIVE_LOG_STATUSES.
@@ -307,8 +328,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   // Route webview messages back to VS Code commands
+  const approvalsInProgress = new Set<string>();
   bridge.onMessage(async (msg: unknown) => {
-    const m = msg as { type: string; command?: string; url?: string; approvalInstanceId?: string; action?: string; comments?: string; page?: number; filter?: string; pageSize?: number; range?: string; planExecutionId?: string; pipelineIdentifier?: string; firstStageId?: string; pipelineId?: string; pinnedPipelines?: string[]; interruptType?: string };
+    const m = msg as { type: string; command?: string; url?: string; approvalInstanceId?: string; nodeId?: string; action?: string; comments?: string; page?: number; filter?: string; pageSize?: number; range?: string; planExecutionId?: string; pipelineIdentifier?: string; firstStageId?: string; pipelineId?: string; pinnedPipelines?: string[]; interruptType?: string };
 
     logger.debug('Extension', 'Bridge received message:', m.type);
 
@@ -318,21 +340,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else if (m.command) {
         vscode.commands.executeCommand(m.command);
       }
-    } else if (m.type === 'approval' && (m as any).planExecutionId && currentConfig) {
-      const planExecutionId = (m as any).planExecutionId as string;
+    } else if (m.type === 'approval' && m.planExecutionId && currentConfig) {
+      const { planExecutionId, nodeId, approvalInstanceId, comments } = m;
       const action = m.action === 'REJECT' ? 'REJECT' : 'APPROVE';
+      const key = JSON.stringify([planExecutionId, nodeId]);
+      if (approvalsInProgress.has(key)) return;
+      approvalsInProgress.add(key);
+      let submitted = false;
       try {
-        await submitApproval(currentConfig, planExecutionId, action, {
-          comments: m.comments,
-          nodeExecutionId: (m as any).nodeId as string | undefined,
-          approvalInstanceId: (m as any).approvalInstanceId as string | undefined,
+        submitted = await submitApproval(currentConfig, planExecutionId, action, {
+          comments,
+          nodeExecutionId: nodeId,
+          approvalInstanceId,
+          promptForInput: promptForApprovalInput,
         });
-        const actionPastTense = action === 'REJECT' ? 'rejected' : 'approved';
-        vscode.window.showInformationMessage(`Harness: Approval ${actionPastTense} successfully.`);
-        poller?.refresh();
+        if (submitted) {
+          const actionPastTense = action === 'REJECT' ? 'rejected' : 'approved';
+          vscode.window.showInformationMessage(`Harness: Approval ${actionPastTense} successfully.`);
+          poller?.refresh();
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         vscode.window.showErrorMessage(`Harness: Failed to ${action.toLowerCase()} — ${msg}`);
+      } finally {
+        approvalsInProgress.delete(key);
+        if (!submitted) bridge.send({ type: 'APPROVAL_RETRY', planExecutionId, nodeId });
       }
     } else if (m.type === 'rerunPipeline' && m.planExecutionId && m.pipelineIdentifier && currentConfig) {
       const planExecutionId = m.planExecutionId;
