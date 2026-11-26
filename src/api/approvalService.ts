@@ -42,10 +42,31 @@ async function collectApprovalInputs(fields: ApproverInputField[], options: Appr
   }
 }
 
+type ApprovalAction = 'APPROVE' | 'REJECT';
+type ApprovalOutcome = 'submitted' | 'cancelled' | 'step-busy' | 'another-step-busy';
+
+export function createApprovalRunner() {
+  // Quick Input is shared across steps, so lock before starting the API lookup.
+  let active: { planExecutionId: string; nodeExecutionId?: string } | undefined;
+  return async (config: HarnessConfig, planExecutionId: string, action: ApprovalAction, options: ApprovalOptions): Promise<ApprovalOutcome> => {
+    const { nodeExecutionId } = options;
+    if (active) {
+      return active.planExecutionId === planExecutionId && active.nodeExecutionId === nodeExecutionId
+        ? 'step-busy' : 'another-step-busy';
+    }
+    active = { planExecutionId, nodeExecutionId };
+    try {
+      return await submitApproval(config, planExecutionId, action, options) ? 'submitted' : 'cancelled';
+    } finally {
+      active = undefined;
+    }
+  };
+}
+
 export async function submitApproval(
   config: HarnessConfig,
   planExecutionId: string,
-  action: 'APPROVE' | 'REJECT',
+  action: ApprovalAction,
   options: ApprovalOptions,
 ): Promise<boolean> {
   let approvalInstanceId: string;

@@ -11,7 +11,7 @@ import { StatusBarItem } from './ui/statusBar';
 import { DiagnosticsManager } from './features/diagnosticsManager';
 import { TiCodeActionProvider } from './features/tiAnnotations';
 import { registerFfDecorations } from './features/ffDecorations';
-import { approvalBack, submitApproval } from './api/approvalService';
+import { approvalBack, createApprovalRunner } from './api/approvalService';
 import type { ApproverInputField } from './api/approvalInstances';
 import { rerunPipeline } from './api/rerunService';
 import { abortExecution, InterruptType } from './api/abortService';
@@ -61,7 +61,7 @@ function promptForApprovalInput(field: ApproverInputField, step: number, total: 
     const items = field.choices.map(value => ({ label: value, value, description: value === field.defaultValue ? 'Default' : undefined }));
     const defaultIndex = items.findIndex(item => item.value === field.defaultValue);
     if (defaultIndex > 0) items.unshift(...items.splice(defaultIndex, 1));
-    if (!field.required) items.push({ label: 'Leave blank', value: '', description: undefined });
+    if (!field.required) items.push({ label: 'Leave blank', value: '', description: 'Empty value' });
     picker.title = title;
     picker.placeholder = hint;
     picker.items = items;
@@ -88,7 +88,12 @@ function reviewApprovalInputs(values: readonly { name: string; value: string }[]
   picker.title = 'Harness: Review and Approve';
   picker.placeholder = 'Select a field to edit it, or choose Approve and Submit.';
   picker.items = [
-    ...values.map(({ name, value }, index) => ({ label: name, detail: value === '' ? '(blank)' : value, action: index })),
+    ...values.map(({ name, value }, index) => ({
+      label: name,
+      description: value === '' ? 'Blank — no value' : undefined,
+      detail: value || undefined,
+      action: index,
+    })),
     { label: 'Action', kind: vscode.QuickPickItemKind.Separator },
     { label: '$(check) Approve and Submit', action: 'approve' },
   ];
@@ -370,7 +375,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   // Route webview messages back to VS Code commands
-  const approvalsInProgress = new Set<string>();
+  const runApproval = createApprovalRunner();
   bridge.onMessage(async (msg: unknown) => {
     const m = msg as { type: string; command?: string; url?: string; approvalInstanceId?: string; nodeId?: string; action?: string; comments?: string; page?: number; filter?: string; pageSize?: number; range?: string; planExecutionId?: string; pipelineIdentifier?: string; firstStageId?: string; pipelineId?: string; pinnedPipelines?: string[]; interruptType?: string };
 
@@ -385,29 +390,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } else if (m.type === 'approval' && m.planExecutionId && currentConfig) {
       const { planExecutionId, nodeId, approvalInstanceId, comments } = m;
       const action = m.action === 'REJECT' ? 'REJECT' : 'APPROVE';
-      const key = JSON.stringify([planExecutionId, nodeId]);
-      if (approvalsInProgress.has(key)) return;
-      approvalsInProgress.add(key);
-      let submitted = false;
+      const retry = () => bridge.send({ type: 'APPROVAL_RETRY', planExecutionId, nodeId });
       try {
-        submitted = await submitApproval(currentConfig, planExecutionId, action, {
+        const outcome = await runApproval(currentConfig, planExecutionId, action, {
           comments,
           nodeExecutionId: nodeId,
           approvalInstanceId,
           promptForInput: promptForApprovalInput,
           reviewInputs: reviewApprovalInputs,
         });
-        if (submitted) {
+        if (outcome === 'submitted') {
           const actionPastTense = action === 'REJECT' ? 'rejected' : 'approved';
           vscode.window.showInformationMessage(`Harness: Approval ${actionPastTense} successfully.`);
           poller?.refresh();
+        } else {
+          // Do not re-enable the active step before its own action finishes.
+          if (outcome !== 'step-busy') retry();
+          if (outcome !== 'cancelled') {
+            vscode.window.showInformationMessage('Harness: Finish or cancel the current approval action before starting another.');
+          }
         }
       } catch (e: unknown) {
+        retry();
         const msg = e instanceof Error ? e.message : String(e);
         vscode.window.showErrorMessage(`Harness: Failed to ${action.toLowerCase()} — ${msg}`);
-      } finally {
-        approvalsInProgress.delete(key);
-        if (!submitted) bridge.send({ type: 'APPROVAL_RETRY', planExecutionId, nodeId });
       }
     } else if (m.type === 'rerunPipeline' && m.planExecutionId && m.pipelineIdentifier && currentConfig) {
       const planExecutionId = m.planExecutionId;

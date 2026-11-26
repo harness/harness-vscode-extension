@@ -1153,11 +1153,7 @@ window.addEventListener('message', ({ data: msg }) => {
       return;
 
     case 'APPROVAL_RETRY':
-      document.querySelectorAll<HTMLButtonElement>('[data-action="approve"],[data-action="reject"]').forEach(button => {
-        if (button.dataset['id'] === msg.planExecutionId && button.dataset['nodeid'] === msg.nodeId) {
-          button.disabled = false;
-        }
-      });
+      setApprovalButtonsDisabled(msg.planExecutionId, msg.nodeId, false);
       return;
 
     case 'RERUN_CANCELLED':
@@ -4225,6 +4221,16 @@ function bindOpaTooltips(): void {
 // ── Bind ───────────────────────────────────────────────────────────────────
 let aiEventDelegationSetup = false;
 
+const approvalButtonSelector = '[data-action="approve"],[data-action="reject"]';
+
+function setApprovalButtonsDisabled(planExecutionId: string, nodeId: string | undefined, disabled: boolean): void {
+  document.querySelectorAll<HTMLButtonElement>(approvalButtonSelector).forEach(button => {
+    if (button.dataset['id'] === planExecutionId && button.dataset['nodeid'] === nodeId) {
+      button.disabled = disabled;
+    }
+  });
+}
+
 function bind(): void {
   q('[data-action="configure"]',     () => vscode.postMessage({ type: 'command', command: 'harness.configureApiKey' }));
   q('[data-action="openProblems"]',  () => vscode.postMessage({ type: 'command', command: 'workbench.actions.view.problems' }));
@@ -4650,16 +4656,17 @@ function bind(): void {
     });
   });
 
-  document.querySelectorAll<HTMLElement>('[data-action="approve"],[data-action="reject"]').forEach(el => {
+  document.querySelectorAll<HTMLButtonElement>(approvalButtonSelector).forEach(el => {
     el.addEventListener('click', () => {
-      const id     = el.dataset['id'];
+      const id = el.dataset['id'];
+      const nodeId = el.dataset['nodeid'];
       const action = el.dataset['action'] === 'reject' ? 'REJECT' : 'APPROVE';
-      if (!id) return;
-      el.setAttribute('disabled', 'true');
+      if (!id || el.disabled) return;
+      setApprovalButtonsDisabled(id, nodeId, true);
       vscode.postMessage({
         type: 'approval',
         planExecutionId: id,
-        nodeId: el.dataset['nodeid'],
+        nodeId,
         approvalInstanceId: el.dataset['instance'] || undefined,
         action,
       });

@@ -9,7 +9,7 @@ import {
   type ApproverInputField,
 } from './approvalInstances';
 import { formatUserGroupLabel, resolveUserGroup, userGroupMemberUrl } from './userGroups';
-import { approvalBack, submitApproval } from './approvalService';
+import { approvalBack, createApprovalRunner, submitApproval } from './approvalService';
 import type { HarnessConfig } from '../config/configManager';
 
 describe('user group scope', () => {
@@ -124,6 +124,48 @@ function mockApprovalApi(t: import('node:test').TestContext, lookup: Response, a
 }
 
 const target = { nodeExecutionId: 'node-1', approvalInstanceId: 'inst-1' };
+
+describe('one active approval action', () => {
+  it('blocks overlapping actions during lookup and review, then accepts a new action after cancellation', async t => {
+    const runApproval = createApprovalRunner();
+    const other = { nodeExecutionId: 'node-2', approvalInstanceId: 'inst-2' };
+    let finishLookup!: (response: Response) => void;
+    const lookup = new Promise<Response>(resolve => { finishLookup = resolve; });
+    const requests: Array<{ method: string; url: URL }> = [];
+    t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      requests.push({ method, url: new URL(url) });
+      return method === 'GET' ? lookup : new Response(null, { status: 204 });
+    });
+
+    const first = runApproval(config, 'exec-1', 'APPROVE', {
+      ...target,
+      promptForInput: async () => 'example value',
+      reviewInputs: async () => {
+        assert.equal(await runApproval(config, 'exec-1', 'REJECT', { ...target, ...noPrompts }), 'step-busy');
+        assert.equal(await runApproval(config, 'exec-2', 'REJECT', { ...other, ...noPrompts }), 'another-step-busy');
+        return undefined;
+      },
+    });
+    assert.equal(await runApproval(config, 'exec-1', 'APPROVE', { ...other, ...noPrompts }), 'another-step-busy');
+    assert.equal(await runApproval(config, 'exec-2', 'APPROVE', { ...target, ...noPrompts }), 'another-step-busy');
+    assert.deepEqual(requests.map(req => req.method), ['GET']);
+    finishLookup(Response.json([instance([fields[0]])]));
+    assert.equal(await first, 'cancelled');
+    assert.deepEqual(requests.map(req => req.method), ['GET']);
+    assert.equal(await runApproval(config, 'exec-2', 'REJECT', { ...other, ...noPrompts }), 'submitted');
+    assert.deepEqual(requests.map(req => req.method), ['GET', 'POST']);
+    assert.match(requests[1].url.pathname, /\/approvals\/inst-2\/harness\/activity$/);
+  });
+
+  it('allows a new action after a lookup fails', async t => {
+    const runApproval = createApprovalRunner();
+    const requests = mockApprovalApi(t, new Response(null, { status: 403 }));
+    await assert.rejects(runApproval(config, 'exec-1', 'APPROVE', { ...target, ...noPrompts }), /Could not verify/);
+    assert.equal(await runApproval(config, 'exec-1', 'REJECT', { ...target, ...noPrompts }), 'submitted');
+    assert.deepEqual(requests.map(req => req.method), ['GET', 'POST']);
+  });
+});
 
 describe('native approval activity', () => {
   it('verifies an existing instance, prompts for every field, and submits exact name/value pairs together', async t => {
